@@ -1,0 +1,29 @@
+{
+  "name": "desktop-pet-suite",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "build:win:x64": "electron-builder --win nsis:x64"
+  },
+  "devDependencies": {
+    "electron": "41.10.4",
+    "electron-builder": "26.15.7"
+  },
+  "dependencies": {
+    "koffi": "2.16.3",
+    "ws": "8.21.0"
+  },
+  "build": {
+    "appId": "local.desktop.pet.suite",
+    "productName": "Desktop Pet Suite",
+    "win": {
+      "artifactName": "Desktop-Pet-Suite-Setup-${version}-${arch}.${ext}",
+      "target": [{ "target": "nsis", "arch": ["x64"] }]
+    },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true },
+    "files": ["src/**/*", "assets/**/*"]
+  }
+}

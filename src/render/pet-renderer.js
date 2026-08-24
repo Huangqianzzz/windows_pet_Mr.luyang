@@ -1,0 +1,1 @@
+window.desktopPet.getBootstrap();
