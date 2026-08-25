@@ -81,11 +81,11 @@ test("rejects a source rectangle outside its sprite sheet", () => {
   );
 });
 
-test("loads the shipped placeholder animation manifest", () => {
+test("loads the shipped preview animation manifest", () => {
   const { loadManifest } = require("../src/domain/animation-manifest");
   const manifest = loadManifest(path.join(__dirname, "..", "assets", "animations", "manifest.json"));
 
-  assert.equal(manifest.actions.idle.fps, 1);
+  assert.equal(manifest.actions.idle.fps, 4);
 });
 
 test("uses a manifest location marker when no action or frame exists", () => {

@@ -62,8 +62,8 @@ function hardenWindow(window) {
 
 function createPetWindow() {
   petWindow = new BrowserWindow({
-    width: 320,
-    height: 420,
+    width: 192,
+    height: 208,
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
