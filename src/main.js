@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, Menu } = require("electron");
 const path = require("node:path");
+const { loadAnimationBootstrap } = require("./runtime/animation-bootstrap");
 
 let petWindow;
 
@@ -32,7 +33,8 @@ function createPetWindow() {
 }
 
 ipcMain.handle("desktop-pet:get-bootstrap", () => ({
-  appVersion: app.getVersion()
+  appVersion: app.getVersion(),
+  ...loadAnimationBootstrap()
 }));
 
 ipcMain.handle("desktop-pet:action", (_event, action) => ({
