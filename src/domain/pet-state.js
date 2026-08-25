@@ -33,6 +33,20 @@ function canInterrupt(state, eventType) {
 }
 
 function reducePetState(state, event) {
+  if (state.mode === "resting") {
+    if (event?.type === "SUPPORT_LOST") return Object.freeze({ mode: "falling" });
+    if (event?.type === "RESUME" && event.resumeState && typeof event.resumeState.mode === "string") {
+      return Object.freeze({ mode: event.resumeState.mode });
+    }
+    return state;
+  }
+  if (event?.type === "REST" && !["dragging", "falling", "speaking", "dueling", "landing"].includes(state.mode)) {
+    return Object.freeze({ mode: "resting" });
+  }
+  if (state.mode === "speaking" && event?.type === "SPEECH_COMPLETE"
+    && event.resumeState && typeof event.resumeState.mode === "string") {
+    return Object.freeze({ mode: event.resumeState.mode });
+  }
   if (state.mode === "dragging" && event?.type === "DRAG_END_ATTACH") {
     return Object.freeze({ mode: "attached" });
   }

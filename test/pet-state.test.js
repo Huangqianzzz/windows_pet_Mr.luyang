@@ -32,7 +32,9 @@ test("support loss overrides rest while random behavior does not", () => {
   const resting = reducePetState(initialState(), { type: "REST" });
 
   assert.equal(reducePetState(resting, { type: "RANDOM_ROAM" }).mode, "resting");
+  assert.equal(reducePetState(resting, { type: "DRAG_START" }).mode, "resting");
   assert.equal(reducePetState(resting, { type: "SUPPORT_LOST" }).mode, "falling");
+  assert.equal(reducePetState(resting, { type: "RESUME", resumeState: { mode: "attached" } }).mode, "attached");
 });
 
 test("canInterrupt requires a strictly higher-priority target mode", () => {

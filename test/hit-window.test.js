@@ -145,6 +145,24 @@ test("preload keeps three public APIs and validates internal animation and frame
   assert.deepEqual(JSON.parse(JSON.stringify(dispatched[0].detail)),
     { id: 1, action: "fall", force: true });
 
+  assert.equal(ipcHandlers.has("desktop-pet:interaction-command"), true);
+  ipcHandlers.get("desktop-pet:interaction-command")({}, {
+    id: 4,
+    type: "kneel",
+    expiresAt: 10_000
+  });
+  ipcHandlers.get("desktop-pet:interaction-command")({}, {
+    id: 5,
+    type: "recover",
+    action: "prone",
+    expiresAt: 10_000
+  });
+  ipcHandlers.get("desktop-pet:interaction-command")({}, { id: 6, type: "kneel" });
+  assert.deepEqual(dispatched.slice(1).map(event => JSON.parse(JSON.stringify(event.detail))), [
+    { id: 4, type: "kneel", expiresAt: 10_000 },
+    { id: 5, type: "recover", action: "prone", expiresAt: 10_000 }
+  ]);
+
   localHandlers.get("desktop-pet:frame-hit-box")({
     detail: { x: 1, y: 2, width: 3, height: 4 }
   });
@@ -152,11 +170,15 @@ test("preload keeps three public APIs and validates internal animation and frame
     detail: { x: 1, y: 2, width: 0, height: 4 }
   });
   localHandlers.get("desktop-pet:animation-complete")({ detail: { id: 1 } });
+  localHandlers.get("desktop-pet:interaction-result")({
+    detail: { id: 4, accepted: false, reason: "expired" }
+  });
   await Promise.resolve();
 
-  assert.deepEqual(invokes.slice(-3).map(args => JSON.parse(JSON.stringify(args))), [
+  assert.deepEqual(invokes.slice(-4).map(args => JSON.parse(JSON.stringify(args))), [
     ["desktop-pet:update-hit-box", { x: 1, y: 2, width: 3, height: 4 }],
     ["desktop-pet:update-hit-box", null],
-    ["desktop-pet:animation-complete", { id: 1 }]
+    ["desktop-pet:animation-complete", { id: 1 }],
+    ["desktop-pet:interaction-result", { id: 4, accepted: false, reason: "expired" }]
   ]);
 });

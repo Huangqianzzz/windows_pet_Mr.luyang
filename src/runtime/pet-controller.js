@@ -8,6 +8,14 @@ const { stepFall } = require("../domain/fall");
 const { initialState, reducePetState } = require("../domain/pet-state");
 
 const INPUT_ACTIONS = Object.freeze(["drag-start", "drag-move", "drag-end"]);
+const ATTACHED_RECOVERY_ACTIONS = new Set([
+  "sit",
+  "prone",
+  "legs-dangle",
+  "wall-grab",
+  "wall-climb",
+  "hang"
+]);
 
 function validatePetAction(action, payload) {
   if (!INPUT_ACTIONS.includes(action) || !payload || typeof payload !== "object") return null;
@@ -64,6 +72,8 @@ class PetController {
     this.obstacleIndex = obstacleIndex;
     this.animationBridge = animationBridge;
     this.body = { ...body };
+    this.baseSize = { width: body.width, height: body.height };
+    this.currentScale = 1;
     this.renderWindow = renderWindow;
     this.hitWindow = hitWindow;
     this.choosePose = choosePose;
@@ -73,6 +83,8 @@ class PetController {
     this.attachment = null;
     this.dragOffset = null;
     this.frameHitBox = null;
+    this.restResumeState = null;
+    this.speechResumeState = null;
   }
 
   snapshot() {
@@ -92,8 +104,63 @@ class PetController {
   }
 
   rest() {
-    this.state = reducePetState(this.state, { type: "REST" });
-    return this.state.mode === "resting";
+    if (this.state.mode === "resting") return false;
+    const previous = this.state;
+    const next = reducePetState(previous, { type: "REST" });
+    if (next.mode !== "resting") return false;
+    this.restResumeState = previous;
+    this.state = next;
+    return true;
+  }
+
+  resume() {
+    if (this.state.mode !== "resting" || !this.restResumeState) return false;
+    this.state = reducePetState(this.state, { type: "RESUME", resumeState: this.restResumeState });
+    this.restResumeState = null;
+    return true;
+  }
+
+  beginSpeech() {
+    if (this.state.mode === "speaking") return false;
+    const previous = this.state;
+    const next = reducePetState(previous, { type: "SPEAK" });
+    if (next.mode !== "speaking") return false;
+    if (previous.mode === "attached" && ATTACHED_RECOVERY_ACTIONS.has(this.attachment?.pose)) {
+      this.speechResumeState = Object.freeze({ state: previous, action: this.attachment.pose });
+    } else if (previous.mode === "crawling") {
+      this.speechResumeState = Object.freeze({ state: previous, action: "crawl" });
+    } else {
+      this.speechResumeState = Object.freeze({ state: initialState(), action: "idle" });
+    }
+    this.state = next;
+    return true;
+  }
+
+  finishSpeech() {
+    if (this.state.mode !== "speaking" || !this.speechResumeState) return false;
+    const recovery = this.speechResumeState;
+    this.state = reducePetState(this.state, {
+      type: "SPEECH_COMPLETE",
+      resumeState: recovery.state
+    });
+    this.speechResumeState = null;
+    return recovery.action;
+  }
+
+  setScale(scale) {
+    if (!Number.isFinite(scale) || scale < 1 || scale > 2) return false;
+    this.body = {
+      ...this.body,
+      width: this.baseSize.width * scale,
+      height: this.baseSize.height * scale
+    };
+    this.currentScale = scale;
+    this.#renderBody();
+    if (this.frameHitBox && this.state.mode !== "falling") {
+      this.#hideHitRegion();
+      this.#showCurrentHitRegion();
+    }
+    return true;
   }
 
   supportLost() {
@@ -102,6 +169,8 @@ class PetController {
     if (this.state.mode !== "falling") return false;
     this.attachment = null;
     this.frameHitBox = null;
+    this.restResumeState = null;
+    this.speechResumeState = null;
     this.#hideHitRegion();
     this.#playAnimation("fall", undefined, true);
     return previous !== this.state || previous.mode === "falling";
@@ -234,10 +303,10 @@ class PetController {
   #showCurrentHitRegion() {
     if (!this.frameHitBox || this.state.mode === "falling") return;
     this.hitWindow?.setBounds?.({
-      x: Math.round(this.body.x + this.frameHitBox.x),
-      y: Math.round(this.body.y + this.frameHitBox.y),
-      width: Math.max(1, Math.ceil(this.frameHitBox.width)),
-      height: Math.max(1, Math.ceil(this.frameHitBox.height))
+      x: Math.round(this.body.x + this.frameHitBox.x * this.currentScale),
+      y: Math.round(this.body.y + this.frameHitBox.y * this.currentScale),
+      width: Math.max(1, Math.ceil(this.frameHitBox.width * this.currentScale)),
+      height: Math.max(1, Math.ceil(this.frameHitBox.height * this.currentScale))
     });
     this.hitWindow?.showInactive?.();
   }
