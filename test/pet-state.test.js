@@ -58,3 +58,26 @@ test("reducePetState creates a frozen plain object when an event interrupts", ()
   assert.equal(Object.isFrozen(next), true);
   assert.equal(Object.getPrototypeOf(next), Object.prototype);
 });
+
+test("drag release has explicit attached and open-area lifecycle exits", () => {
+  const dragging = reducePetState(initialState(), { type: "DRAG_START" });
+
+  assert.equal(reducePetState(dragging, { type: "DRAG_END_ATTACH" }).mode, "attached");
+  assert.equal(reducePetState(dragging, { type: "DRAG_END_OPEN", pose: "crawl" }).mode, "crawling");
+  assert.equal(reducePetState(dragging, { type: "DRAG_END_OPEN", pose: "land" }).mode, "landing");
+});
+
+test("landing and action completion are explicit lifecycle transitions", () => {
+  const falling = reducePetState(initialState(), { type: "FALL" });
+  const landing = reducePetState(falling, { type: "LAND" });
+
+  assert.equal(landing.mode, "landing");
+  assert.equal(reducePetState(landing, { type: "ACTION_COMPLETE" }).mode, "idle");
+  assert.equal(reducePetState(falling, { type: "ACTION_COMPLETE" }), falling);
+});
+
+test("support loss remains an explicit high-priority exit from attachment", () => {
+  const attached = reducePetState(initialState(), { type: "ATTACH" });
+
+  assert.equal(reducePetState(attached, { type: "SUPPORT_LOST" }).mode, "falling");
+});

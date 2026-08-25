@@ -3,9 +3,30 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 const fs = require("node:fs");
 
+class LocalCustomEvent {
+  constructor(type, { detail }) {
+    this.type = type;
+    this.detail = detail;
+  }
+}
+
+function localEventTarget(onEvent = () => {}) {
+  const listeners = new Map();
+  return {
+    CustomEvent: LocalCustomEvent,
+    addEventListener(type, listener) { listeners.set(type, listener); },
+    dispatchEvent(event) {
+      onEvent(event);
+      listeners.get(event.type)?.(event);
+    }
+  };
+}
+
 test("loads browser-safe animation dependencies before the renderer", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "src", "render", "pet.html"), "utf8");
 
+  assert.ok(html.indexOf("../domain/animation-manifest.js") < html.indexOf("../runtime/animation-protocol.js"));
+  assert.ok(html.indexOf("../runtime/animation-protocol.js") < html.indexOf("../runtime/animation-player.js"));
   assert.ok(html.indexOf("../domain/animation-manifest.js") < html.indexOf("../runtime/animation-player.js"));
   assert.ok(html.indexOf("../runtime/animation-player.js") < html.indexOf("pet-renderer.js"));
 });
@@ -34,6 +55,7 @@ test("bootstraps idle and applies its first sprite-sheet frame", async () => {
     }
   };
   let playedAction;
+  const hitBoxes = [];
   class FakePlayer {
     constructor(receivedManifest) {
       this.manifest = receivedManifest;
@@ -62,11 +84,15 @@ test("bootstraps idle and applies its first sprite-sheet frame", async () => {
   delete require.cache[require.resolve(rendererPath)];
   const renderer = require(rendererPath);
   assert.equal(typeof renderer.mountPet, "function");
+  const eventTarget = localEventTarget(event => {
+    if (event.type === "desktop-pet:frame-hit-box") hitBoxes.push(event.detail);
+  });
   const mounted = renderer.mountPet({
     document: global.document,
     desktopPet: global.window.desktopPet,
     AnimationPlayer: FakePlayer,
-    locationHref: global.window.location.href
+    locationHref: global.window.location.href,
+    eventTarget
   });
   await mounted.ready;
 
@@ -79,6 +105,7 @@ test("bootstraps idle and applies its first sprite-sheet frame", async () => {
   assert.equal(root.children[0].style.backgroundPosition, "-10px 0px");
   assert.equal(root.children[0].style.backgroundSize, "30px 10px");
   assert.equal(root.children[0].style.backgroundImage, "url(\"file:///C:/pet/assets/animations/sheets/idle.png\")");
+  assert.deepEqual(hitBoxes, [{ x: 1, y: 1, width: 8, height: 8 }]);
   global.window = previousWindow;
   global.document = previousDocument;
 });
@@ -127,7 +154,8 @@ test("renders from the player's frozen manifest after bootstrap data is tampered
     document,
     desktopPet: { getBootstrap: () => Promise.resolve({ manifest }) },
     AnimationPlayer: TamperingPlayer,
-    locationHref: "file:///C:/pet/src/render/pet.html"
+    locationHref: "file:///C:/pet/src/render/pet.html",
+    eventTarget: localEventTarget()
   });
 
   await mounted.ready;

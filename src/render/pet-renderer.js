@@ -1,4 +1,8 @@
 (function mountRenderer(global) {
+  const animationProtocol = typeof module === "object" && module.exports
+    ? require("../runtime/animation-protocol")
+    : global.DesktopPetAnimationProtocol;
+
   function isLocalAnimationAsset(file) {
     return typeof file === "string"
       && file.length > 0
@@ -25,21 +29,54 @@
     sprite.style.backgroundSize = `${action.sheet.width}px ${action.sheet.height}px`;
   }
 
-  function mountPet({ document, desktopPet, AnimationPlayer, locationHref }) {
+  function dispatchDetail(eventTarget, type, detail) {
+    const CustomEventClass = eventTarget.CustomEvent || globalThis.CustomEvent;
+    eventTarget.dispatchEvent(new CustomEventClass(type, { detail }));
+  }
+
+  function mountPet({ document, desktopPet, AnimationPlayer, locationHref, eventTarget = global }) {
     const root = document.getElementById("pet-root");
     const sprite = document.createElement("div");
     sprite.className = "pet-sprite";
     sprite.setAttribute("aria-hidden", "true");
     root.append(sprite);
 
+    let player;
+    const pendingCommands = [];
+    const reportFrame = (frame, _frameIndex, actionName) => {
+      dispatchDetail(eventTarget, animationProtocol.FRAME_HIT_BOX_EVENT, frame.hitBox);
+      applyFrame(sprite, player.manifest.actions[actionName], frame, locationHref);
+    };
+    const playCommand = rawCommand => {
+      const command = animationProtocol.validateAnimationCommand(rawCommand);
+      if (!command || !player) return false;
+      const actionName = player.manifest.actions[command.action] ? command.action : "idle";
+      let completed = false;
+      const complete = () => {
+        if (completed) return;
+        completed = true;
+        dispatchDetail(eventTarget, animationProtocol.ANIMATION_COMPLETE_EVENT, { id: command.id });
+      };
+      const played = player.play(actionName, {
+        force: command.force,
+        onFrame: reportFrame,
+        onComplete: complete
+      });
+      if (played && actionName !== command.action) complete();
+      return Boolean(played);
+    };
+    eventTarget.addEventListener(animationProtocol.ANIMATION_COMMAND_EVENT, event => {
+      if (player) playCommand(event.detail);
+      else pendingCommands.push(event.detail);
+    });
+
     const ready = desktopPet.getBootstrap()
       .then(({ manifest }) => {
-        const player = new AnimationPlayer(manifest);
+        player = new AnimationPlayer(manifest);
         player.play("idle", {
-          onFrame: (frame, _frameIndex, actionName) => {
-            applyFrame(sprite, player.manifest.actions[actionName], frame, locationHref);
-          }
+          onFrame: reportFrame
         });
+        for (const command of pendingCommands.splice(0)) playCommand(command);
         return player;
       })
       .catch(() => undefined);
@@ -61,4 +98,4 @@
       locationHref: global.location.href
     });
   }
-}(window));
+}(typeof window === "undefined" ? globalThis : window));
