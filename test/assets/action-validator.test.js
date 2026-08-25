@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const zlib = require("node:zlib");
 
-const { readPng, validateAction } = require("../../scripts/assets/validate-action");
+const { MAX_PNG_CHUNK_BYTES, MAX_PNG_FILE_BYTES, MAX_PNG_IDAT_BYTES, readPng, validateAction } = require("../../scripts/assets/validate-action");
 const { packAction } = require("../../scripts/assets/pack-action");
 
 const fixtures = path.join(__dirname, "fixtures");
@@ -72,11 +72,76 @@ async function pngFilePath(t, contents) {
   return file;
 }
 
+function rgbaIdat() {
+  return zlib.deflateSync(Buffer.from([0, 255, 0, 0, 255]));
+}
+
+function ancillaryPng() {
+  const gamma = Buffer.alloc(4);
+  gamma.writeUInt32BE(45455);
+  const physical = Buffer.alloc(9);
+  physical.writeUInt32BE(3780, 0);
+  physical.writeUInt32BE(3780, 4);
+  physical[8] = 1;
+  const profile = Buffer.concat([Buffer.from("display-profile\0\0", "latin1"), zlib.deflateSync(Buffer.from("profile"))]);
+  return pngFile([
+    pngChunk("IHDR", pngHeader(1, 1)),
+    pngChunk("sRGB", Buffer.from([0])),
+    pngChunk("gAMA", gamma),
+    pngChunk("pHYs", physical),
+    pngChunk("iCCP", profile),
+    pngChunk("IDAT", rgbaIdat()),
+    pngChunk("IEND", Buffer.alloc(0))
+  ]);
+}
+
 test("accepts complete 30 FPS action metadata", async (t) => {
   const directory = await actionDirectory(t);
   const report = await validateAction(directory, await fixture("valid-action.json"));
 
   assert.deepEqual(report, { name: "idle", width: 2, height: 2, frames: ["frame-0001.png", "frame-0002.png"] });
+});
+
+for (const { label, change, expected } of [
+  { label: "missing action name", change: (action) => { delete action.name; }, expected: /action name is required/ },
+  { label: "missing loop flag", change: (action) => { delete action.loop; }, expected: /loop flag is required/ },
+  { label: "missing interruptible flag", change: (action) => { delete action.interruptible; }, expected: /interruptible flag is required/ },
+  { label: "missing hitBox", change: (action) => { delete action.frames[1].hitBox; }, expected: /frame 2: hitBox is required/ },
+  { label: "missing contacts", change: (action) => { delete action.frames[1].contacts; }, expected: /frame 2: contacts are required/ },
+  { label: "missing support anchor", change: (action) => { delete action.frames[1].supportAnchor; }, expected: /frame 2: supportAnchor is out of bounds/ },
+  { label: "face box out of bounds", change: (action) => { action.frames[1].faceBox.x = 2; }, expected: /frame 2: faceBox is out of bounds/ },
+  { label: "contact out of bounds", change: (action) => { action.frames[1].contacts[0].x = 3; }, expected: /frame 2: contact is out of bounds/ },
+  { label: "support anchor out of bounds", change: (action) => { action.frames[1].supportAnchor.y = 3; }, expected: /frame 2: supportAnchor is out of bounds/ },
+  { label: "frame count mismatch", change: (action) => { action.frames.pop(); }, expected: /metadata frame count/ },
+  { label: "frame name mismatch", change: (action) => { action.frames[1].file = "frame-0003.png"; }, expected: /frame 2: expected frame-0002.png/ }
+]) {
+  test(`rejects ${label}`, async (t) => {
+    const directory = await actionDirectory(t);
+    const action = await fixture("valid-action.json");
+    change(action);
+    await assert.rejects(() => validateAction(directory, action), expected);
+  });
+}
+
+test("allows an explicitly static action below 30 FPS and enforces stable contact boundaries", async (t) => {
+  const directory = await actionDirectory(t);
+  const staticAction = await fixture("valid-action.json");
+  staticAction.static = true;
+  staticAction.fps = 1;
+  await assert.doesNotReject(() => validateAction(directory, staticAction));
+
+  const atThreshold = await fixture("valid-action.json");
+  atThreshold.frames[1].contacts[0].x = 2;
+  await assert.doesNotReject(() => validateAction(directory, atThreshold));
+
+  const overThreshold = await fixture("valid-action.json");
+  overThreshold.frames[1].contacts[0].x = 2;
+  overThreshold.frames[1].contacts[0].y = 1;
+  await assert.rejects(() => validateAction(directory, overThreshold), /contact discontinuity/);
+
+  const duplicateId = await fixture("valid-action.json");
+  duplicateId.frames[1].contacts.push({ id: "left-foot", x: 1, y: 2 });
+  await assert.rejects(() => validateAction(directory, duplicateId), /duplicate contact id/);
 });
 
 test("rejects missing face boxes and discontinuous contacts", async (t) => {
@@ -153,6 +218,54 @@ test("rejects invalid PNG chunk order, CRCs, endings, and oversized dimensions",
   await assert.rejects(() => readPng(duplicateHeader), /PNG has duplicate IHDR/);
   await assert.rejects(() => readPng(nonemptyIend), /IEND must be empty/);
   await assert.rejects(() => readPng(missingIend), /PNG is missing IEND/);
+});
+
+test("accepts common ancillary chunks and bounds file, chunk, and cumulative IDAT bytes", async (t) => {
+  const commonFile = await pngFilePath(t, ancillaryPng());
+  await assert.doesNotReject(() => readPng(commonFile));
+  const oversizedFile = await pngFilePath(t, Buffer.alloc(MAX_PNG_FILE_BYTES + 1));
+  await assert.rejects(() => readPng(oversizedFile), /PNG file exceeds safety limit/);
+
+  const oversizedChunk = await pngFilePath(t, pngFile([
+    pngChunk("IHDR", pngHeader(1, 1)),
+    pngChunk("IDAT", Buffer.alloc(MAX_PNG_CHUNK_BYTES + 1)),
+    pngChunk("IEND", Buffer.alloc(0))
+  ]));
+  await assert.rejects(() => readPng(oversizedChunk), /PNG chunk exceeds safety limit/);
+
+  const firstIdatLength = Math.floor(MAX_PNG_IDAT_BYTES / 2) + 1;
+  const oversizedIdat = await pngFilePath(t, pngFile([
+    pngChunk("IHDR", pngHeader(1, 1)),
+    pngChunk("IDAT", Buffer.alloc(firstIdatLength)),
+    pngChunk("IDAT", Buffer.alloc(firstIdatLength)),
+    pngChunk("IEND", Buffer.alloc(0))
+  ]));
+  await assert.rejects(() => readPng(oversizedIdat), /PNG IDAT data exceeds safety limit/);
+
+  const srgbAfterIdat = await pngFilePath(t, pngFile([
+    pngChunk("IHDR", pngHeader(1, 1)),
+    pngChunk("IDAT", rgbaIdat()),
+    pngChunk("sRGB", Buffer.from([0])),
+    pngChunk("IEND", Buffer.alloc(0))
+  ]));
+  await assert.rejects(() => readPng(srgbAfterIdat), /sRGB must precede IDAT/);
+
+  const invalidPhysical = await pngFilePath(t, pngFile([
+    pngChunk("IHDR", pngHeader(1, 1)),
+    pngChunk("pHYs", Buffer.alloc(8)),
+    pngChunk("IDAT", rgbaIdat()),
+    pngChunk("IEND", Buffer.alloc(0))
+  ]));
+  await assert.rejects(() => readPng(invalidPhysical), /invalid pHYs chunk/);
+
+  const splitIdat = await pngFilePath(t, pngFile([
+    pngChunk("IHDR", pngHeader(1, 1)),
+    pngChunk("IDAT", rgbaIdat()),
+    pngChunk("tEXt", Buffer.from("generator\0test", "latin1")),
+    pngChunk("IDAT", rgbaIdat()),
+    pngChunk("IEND", Buffer.alloc(0))
+  ]));
+  await assert.rejects(() => readPng(splitIdat), /IDAT chunks must be consecutive/);
 });
 
 test("requires stable contact ids and rejects output collisions before publishing", async (t) => {

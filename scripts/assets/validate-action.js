@@ -8,6 +8,10 @@ const MAX_FRAME_WIDTH = 8192;
 const MAX_FRAME_HEIGHT = 8192;
 const MAX_FRAME_PIXELS = 16 * 1024 * 1024;
 const MAX_FRAME_BYTES = MAX_FRAME_PIXELS * 4;
+const MAX_PNG_FILE_BYTES = 8 * 1024 * 1024;
+const MAX_PNG_CHUNK_BYTES = 4 * 1024 * 1024;
+const MAX_PNG_IDAT_BYTES = 6 * 1024 * 1024;
+const MAX_ICCP_PROFILE_BYTES = 4 * 1024 * 1024;
 const CONTACT_MAX_DISTANCE_PIXELS = 12;
 const CONTACT_MAX_DISTANCE_RATIO = 0.04;
 
@@ -46,6 +50,32 @@ function validateFrameSize(width, height, filePath) {
   boundedProduct([width, height], MAX_FRAME_PIXELS, `${filePath}: PNG dimensions exceed safety limit`);
 }
 
+function validateAncillaryChunk(type, data, filePath, sawIdat, seen) {
+  if (!new Set(["sRGB", "gAMA", "pHYs", "iCCP"]).has(type)) return;
+  if (sawIdat) fail(`${filePath}: ${type} must precede IDAT`);
+  if (seen.has(type)) fail(`${filePath}: duplicate ${type} chunk`);
+  seen.add(type);
+  if (type === "sRGB") {
+    if (data.length !== 1 || data[0] > 3) fail(`${filePath}: invalid sRGB chunk`);
+    return;
+  }
+  if (type === "gAMA") {
+    if (data.length !== 4 || data.readUInt32BE(0) === 0) fail(`${filePath}: invalid gAMA chunk`);
+    return;
+  }
+  if (type === "pHYs") {
+    if (data.length !== 9 || data.readUInt32BE(0) === 0 || data.readUInt32BE(4) === 0 || data[8] > 1) fail(`${filePath}: invalid pHYs chunk`);
+    return;
+  }
+  const separator = data.indexOf(0);
+  if (separator < 1 || separator > 79 || separator + 3 > data.length || data[separator + 1] !== 0) fail(`${filePath}: invalid iCCP chunk`);
+  try {
+    zlib.inflateSync(data.subarray(separator + 2), { maxOutputLength: MAX_ICCP_PROFILE_BYTES });
+  } catch (error) {
+    fail(`${filePath}: invalid iCCP profile`);
+  }
+}
+
 function unfilterPng(data, width, height) {
   const stride = width * 4;
   const expected = height * (stride + 1);
@@ -72,7 +102,11 @@ function unfilterPng(data, width, height) {
 }
 
 async function readPng(filePath) {
+  const status = await fs.stat(filePath);
+  if (!status.isFile()) fail(`${filePath}: PNG must be a file`);
+  if (status.size > MAX_PNG_FILE_BYTES) fail(`${filePath}: PNG file exceeds safety limit`);
   const file = await fs.readFile(filePath);
+  if (file.length !== status.size || file.length > MAX_PNG_FILE_BYTES) fail(`${filePath}: PNG file exceeds safety limit`);
   if (file.length < PNG_SIGNATURE.length || !file.subarray(0, 8).equals(PNG_SIGNATURE)) fail(`${filePath}: invalid PNG signature`);
   let offset = PNG_SIGNATURE.length;
   let header;
@@ -80,15 +114,20 @@ async function readPng(filePath) {
   let height;
   let sawIdat = false;
   let sawIend = false;
+  let idatClosed = false;
+  let idatBytes = 0;
   const idat = [];
+  const ancillary = new Set();
   while (offset < file.length) {
     if (offset + 12 > file.length) fail(`${filePath}: truncated PNG chunk`);
     const length = file.readUInt32BE(offset);
     const typeStart = offset + 4;
     const dataStart = offset + 8;
+    if (length > MAX_PNG_CHUNK_BYTES) fail(`${filePath}: PNG chunk exceeds safety limit`);
     const dataEnd = dataStart + length;
     if (!Number.isSafeInteger(dataEnd) || dataEnd + 4 > file.length) fail(`${filePath}: truncated PNG chunk`);
     const type = file.toString("ascii", typeStart, dataStart);
+    if (!/^[A-Za-z]{4}$/.test(type) || (file[typeStart + 2] & 0x20) !== 0) fail(`${filePath}: invalid PNG chunk type`);
     const data = file.subarray(dataStart, dataEnd);
     if (crc32(file.subarray(typeStart, dataEnd)) !== file.readUInt32BE(dataEnd)) fail(`${filePath}: PNG CRC mismatch in ${type}`);
     if (!header) {
@@ -105,6 +144,9 @@ async function readPng(filePath) {
       fail(`${filePath}: PNG has duplicate IHDR`);
     } else if (type === "IDAT") {
       if (sawIend) fail(`${filePath}: IDAT appears after IEND`);
+      if (idatClosed) fail(`${filePath}: IDAT chunks must be consecutive`);
+      if (idatBytes > MAX_PNG_IDAT_BYTES - length) fail(`${filePath}: PNG IDAT data exceeds safety limit`);
+      idatBytes += length;
       sawIdat = true;
       idat.push(data);
     } else if (type === "IEND") {
@@ -115,7 +157,9 @@ async function readPng(filePath) {
       if (offset !== file.length) fail(`${filePath}: PNG has trailing bytes`);
       break;
     } else {
-      fail(`${filePath}: unsupported PNG chunk ${type}`);
+      if ((file[typeStart] & 0x20) === 0) fail(`${filePath}: unsupported critical PNG chunk ${type}`);
+      if (sawIdat) idatClosed = true;
+      validateAncillaryChunk(type, data, filePath, sawIdat, ancillary);
     }
     offset = dataEnd + 4;
   }
@@ -250,4 +294,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { CONTACT_MAX_DISTANCE_PIXELS, CONTACT_MAX_DISTANCE_RATIO, MAX_FRAME_BYTES, collectFrames, readPng, validateAction };
+module.exports = { CONTACT_MAX_DISTANCE_PIXELS, CONTACT_MAX_DISTANCE_RATIO, MAX_FRAME_BYTES, MAX_PNG_CHUNK_BYTES, MAX_PNG_FILE_BYTES, MAX_PNG_IDAT_BYTES, collectFrames, readPng, validateAction };
