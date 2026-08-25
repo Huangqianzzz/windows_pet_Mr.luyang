@@ -11,6 +11,8 @@ test("approved person sources match the recorded hashes", async () => {
   const result = await validateSources("assets/source/person/SHA256SUMS.txt");
 
   assert.deepEqual(result.changed, []);
+  assert.deepEqual(result.missing, []);
+  assert.deepEqual(result.unexpected, []);
   assert.equal(result.files.length, 2);
 });
 
