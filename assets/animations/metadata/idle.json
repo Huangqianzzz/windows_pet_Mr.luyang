@@ -1,0 +1,68 @@
+{
+  "name": "idle",
+  "fps": 30,
+  "loop": true,
+  "interruptible": true,
+  "frames": [
+    {
+      "file": "frame-0001.png",
+      "faceBox": { "x": 83, "y": 5, "width": 28, "height": 34 },
+      "hitBox": { "x": 65, "y": 5, "width": 62, "height": 199 },
+      "contacts": [
+        { "id": "left-foot", "x": 80, "y": 203 },
+        { "id": "right-foot", "x": 115, "y": 203 }
+      ],
+      "supportAnchor": { "x": 96, "y": 203 }
+    },
+    {
+      "file": "frame-0002.png",
+      "faceBox": { "x": 83, "y": 5, "width": 28, "height": 34 },
+      "hitBox": { "x": 65, "y": 5, "width": 62, "height": 199 },
+      "contacts": [
+        { "id": "left-foot", "x": 80, "y": 203 },
+        { "id": "right-foot", "x": 115, "y": 203 }
+      ],
+      "supportAnchor": { "x": 96, "y": 203 }
+    },
+    {
+      "file": "frame-0003.png",
+      "faceBox": { "x": 83, "y": 5, "width": 28, "height": 34 },
+      "hitBox": { "x": 65, "y": 5, "width": 62, "height": 199 },
+      "contacts": [
+        { "id": "left-foot", "x": 80, "y": 203 },
+        { "id": "right-foot", "x": 115, "y": 203 }
+      ],
+      "supportAnchor": { "x": 96, "y": 203 }
+    },
+    {
+      "file": "frame-0004.png",
+      "faceBox": { "x": 83, "y": 5, "width": 28, "height": 34 },
+      "hitBox": { "x": 65, "y": 5, "width": 62, "height": 199 },
+      "contacts": [
+        { "id": "left-foot", "x": 80, "y": 203 },
+        { "id": "right-foot", "x": 115, "y": 203 }
+      ],
+      "supportAnchor": { "x": 96, "y": 203 }
+    },
+    {
+      "file": "frame-0005.png",
+      "faceBox": { "x": 83, "y": 5, "width": 28, "height": 34 },
+      "hitBox": { "x": 65, "y": 5, "width": 62, "height": 199 },
+      "contacts": [
+        { "id": "left-foot", "x": 80, "y": 203 },
+        { "id": "right-foot", "x": 115, "y": 203 }
+      ],
+      "supportAnchor": { "x": 96, "y": 203 }
+    },
+    {
+      "file": "frame-0006.png",
+      "faceBox": { "x": 83, "y": 5, "width": 28, "height": 34 },
+      "hitBox": { "x": 65, "y": 5, "width": 62, "height": 199 },
+      "contacts": [
+        { "id": "left-foot", "x": 80, "y": 203 },
+        { "id": "right-foot", "x": 115, "y": 203 }
+      ],
+      "supportAnchor": { "x": 96, "y": 203 }
+    }
+  ]
+}
