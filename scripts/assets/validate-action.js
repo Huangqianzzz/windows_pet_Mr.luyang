@@ -4,6 +4,12 @@ const zlib = require("node:zlib");
 
 const PNG_SIGNATURE = Buffer.from("89504e470d0a1a0a", "hex");
 const FRAME_NAME = /^frame-(\d{4})\.png$/;
+const MAX_FRAME_WIDTH = 8192;
+const MAX_FRAME_HEIGHT = 8192;
+const MAX_FRAME_PIXELS = 16 * 1024 * 1024;
+const MAX_FRAME_BYTES = MAX_FRAME_PIXELS * 4;
+const CONTACT_MAX_DISTANCE_PIXELS = 12;
+const CONTACT_MAX_DISTANCE_RATIO = 0.04;
 
 function fail(message) {
   throw new Error(message);
@@ -15,6 +21,29 @@ function paeth(left, above, upperLeft) {
   const aboveDistance = Math.abs(estimate - above);
   const upperLeftDistance = Math.abs(estimate - upperLeft);
   return leftDistance <= aboveDistance && leftDistance <= upperLeftDistance ? left : aboveDistance <= upperLeftDistance ? above : upperLeft;
+}
+
+function crc32(buffer) {
+  let value = 0xffffffff;
+  for (const byte of buffer) {
+    value ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) value = (value >>> 1) ^ (0xedb88320 & -(value & 1));
+  }
+  return (value ^ 0xffffffff) >>> 0;
+}
+
+function boundedProduct(values, limit, message) {
+  let product = 1;
+  for (const value of values) {
+    if (!Number.isSafeInteger(value) || value < 0 || product > Math.floor(limit / value)) fail(message);
+    product *= value;
+  }
+  return product;
+}
+
+function validateFrameSize(width, height, filePath) {
+  if (!width || !height || width > MAX_FRAME_WIDTH || height > MAX_FRAME_HEIGHT) fail(`${filePath}: PNG dimensions exceed safety limit`);
+  boundedProduct([width, height], MAX_FRAME_PIXELS, `${filePath}: PNG dimensions exceed safety limit`);
 }
 
 function unfilterPng(data, width, height) {
@@ -44,31 +73,70 @@ function unfilterPng(data, width, height) {
 
 async function readPng(filePath) {
   const file = await fs.readFile(filePath);
-  if (!file.subarray(0, 8).equals(PNG_SIGNATURE)) fail(`${filePath}: invalid PNG signature`);
-  let offset = 8;
+  if (file.length < PNG_SIGNATURE.length || !file.subarray(0, 8).equals(PNG_SIGNATURE)) fail(`${filePath}: invalid PNG signature`);
+  let offset = PNG_SIGNATURE.length;
   let header;
-  const parts = [];
+  let width;
+  let height;
+  let sawIdat = false;
+  let sawIend = false;
+  const idat = [];
   while (offset < file.length) {
     if (offset + 12 > file.length) fail(`${filePath}: truncated PNG chunk`);
     const length = file.readUInt32BE(offset);
-    const type = file.toString("ascii", offset + 4, offset + 8);
-    const start = offset + 8;
-    const end = start + length;
-    if (end + 4 > file.length) fail(`${filePath}: truncated PNG chunk`);
-    const data = file.subarray(start, end);
-    if (type === "IHDR") header = data;
-    if (type === "IDAT") parts.push(data);
-    if (type === "IEND") break;
-    offset = end + 4;
+    const typeStart = offset + 4;
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    if (!Number.isSafeInteger(dataEnd) || dataEnd + 4 > file.length) fail(`${filePath}: truncated PNG chunk`);
+    const type = file.toString("ascii", typeStart, dataStart);
+    const data = file.subarray(dataStart, dataEnd);
+    if (crc32(file.subarray(typeStart, dataEnd)) !== file.readUInt32BE(dataEnd)) fail(`${filePath}: PNG CRC mismatch in ${type}`);
+    if (!header) {
+      if (type !== "IHDR") fail(`${filePath}: IHDR must be the first PNG chunk`);
+      if (length !== 13) fail(`${filePath}: IHDR length is invalid`);
+      header = data;
+      width = header.readUInt32BE(0);
+      height = header.readUInt32BE(4);
+      validateFrameSize(width, height, filePath);
+      if (header[8] !== 8 || header[9] !== 6 || header[10] !== 0 || header[11] !== 0 || header[12] !== 0) {
+        fail(`${filePath}: requires non-interlaced 8-bit RGBA PNG`);
+      }
+    } else if (type === "IHDR") {
+      fail(`${filePath}: PNG has duplicate IHDR`);
+    } else if (type === "IDAT") {
+      if (sawIend) fail(`${filePath}: IDAT appears after IEND`);
+      sawIdat = true;
+      idat.push(data);
+    } else if (type === "IEND") {
+      if (!sawIdat) fail(`${filePath}: PNG has no IDAT`);
+      if (length !== 0) fail(`${filePath}: IEND must be empty`);
+      sawIend = true;
+      offset = dataEnd + 4;
+      if (offset !== file.length) fail(`${filePath}: PNG has trailing bytes`);
+      break;
+    } else {
+      fail(`${filePath}: unsupported PNG chunk ${type}`);
+    }
+    offset = dataEnd + 4;
   }
-  if (!header || header.length !== 13 || parts.length === 0) fail(`${filePath}: incomplete PNG`);
-  const width = header.readUInt32BE(0);
-  const height = header.readUInt32BE(4);
-  if (!width || !height || header[8] !== 8 || header[9] !== 6 || header[10] !== 0 || header[11] !== 0 || header[12] !== 0) {
-    fail(`${filePath}: requires non-interlaced 8-bit RGBA PNG`);
+  if (!header || !sawIend) fail(`${filePath}: PNG is missing IEND`);
+  const rowBytes = boundedProduct([width, 4], MAX_FRAME_BYTES, `${filePath}: PNG dimensions exceed safety limit`);
+  const decodedLength = boundedProduct([height, rowBytes + 1], MAX_FRAME_BYTES, `${filePath}: PNG dimensions exceed safety limit`);
+  let inflated;
+  try {
+    inflated = zlib.inflateSync(Buffer.concat(idat), { maxOutputLength: decodedLength });
+  } catch (error) {
+    fail(`${filePath}: invalid PNG DEFLATE data`);
   }
-  const pixels = unfilterPng(zlib.inflateSync(Buffer.concat(parts)), width, height);
-  return { width, height, pixels, hasVisibleAlpha: pixels.some((_, index) => index % 4 === 3 && pixels[index] !== 0) };
+  const pixels = unfilterPng(inflated, width, height);
+  let hasVisibleAlpha = false;
+  for (let index = 3; index < pixels.length; index += 4) {
+    if (pixels[index] !== 0) {
+      hasVisibleAlpha = true;
+      break;
+    }
+  }
+  return { width, height, pixels, hasVisibleAlpha };
 }
 
 function frameIndex(fileName) {
@@ -118,6 +186,18 @@ function box(value, label, frameNumber, width, height) {
   }
 }
 
+function contacts(value, frameNumber, width, height) {
+  if (!Array.isArray(value) || value.length === 0) fail(`frame ${frameNumber}: contacts are required`);
+  const ids = new Set();
+  return value.map((contact) => {
+    if (!contact || typeof contact.id !== "string" || !/^[a-z][a-z0-9-]*$/.test(contact.id)) fail(`frame ${frameNumber}: contact id is required`);
+    if (ids.has(contact.id)) fail(`frame ${frameNumber}: duplicate contact id ${contact.id}`);
+    ids.add(contact.id);
+    point(contact, "contact", frameNumber, width, height);
+    return contact;
+  });
+}
+
 async function validateAction(actionDir, metadata) {
   const action = await loadMetadata(metadata);
   if (!action || typeof action !== "object" || Array.isArray(action)) fail("metadata must be an object");
@@ -141,15 +221,18 @@ async function validateAction(actionDir, metadata) {
     fileNames.add(frame.file);
     box(frame.faceBox, "faceBox", frameNumber, image.width, image.height);
     box(frame.hitBox, "hitBox", frameNumber, image.width, image.height);
-    if (!Array.isArray(frame.contacts) || frame.contacts.length === 0) fail(`frame ${frameNumber}: contacts are required`);
-    frame.contacts.forEach((contact) => point(contact, "contact", frameNumber, image.width, image.height));
+    const currentContacts = contacts(frame.contacts, frameNumber, image.width, image.height);
     point(frame.supportAnchor, "supportAnchor", frameNumber, image.width, image.height);
     if (previousContacts) {
-      if (previousContacts.length !== frame.contacts.length || frame.contacts.some((contact, contactIndex) => Math.hypot(contact.x - previousContacts[contactIndex].x, contact.y - previousContacts[contactIndex].y) > Math.max(image.width, image.height))) {
-        fail(`contact discontinuity between frame ${frameNumber - 1} and frame ${frameNumber}`);
+      const maxDistance = Math.min(CONTACT_MAX_DISTANCE_PIXELS, Math.max(1, Math.hypot(image.width, image.height) * CONTACT_MAX_DISTANCE_RATIO));
+      for (const contact of currentContacts) {
+        const previous = previousContacts.get(contact.id);
+        if (previous && Math.hypot(contact.x - previous.x, contact.y - previous.y) > maxDistance) {
+          fail(`contact discontinuity for ${contact.id} between frame ${frameNumber - 1} and frame ${frameNumber}`);
+        }
       }
     }
-    previousContacts = frame.contacts;
+    previousContacts = new Map(currentContacts.map((contact) => [contact.id, contact]));
   }
   return { name: action.name, width: frames[0].width, height: frames[0].height, frames: frames.map((frame) => frame.name) };
 }
@@ -167,4 +250,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { collectFrames, readPng, validateAction };
+module.exports = { CONTACT_MAX_DISTANCE_PIXELS, CONTACT_MAX_DISTANCE_RATIO, MAX_FRAME_BYTES, collectFrames, readPng, validateAction };

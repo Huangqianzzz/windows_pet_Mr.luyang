@@ -3,6 +3,11 @@ const path = require("node:path");
 const zlib = require("node:zlib");
 const { collectFrames } = require("./validate-action");
 
+const MAX_SHEET_WIDTH = 16384;
+const MAX_SHEET_HEIGHT = 8192;
+const MAX_SHEET_PIXELS = 64 * 1024 * 1024;
+const MAX_SHEET_BYTES = MAX_SHEET_PIXELS * 4;
+
 function crc32(buffer) {
   let value = 0xffffffff;
   for (const byte of buffer) {
@@ -37,6 +42,51 @@ function encodePng(width, height, pixels) {
   ]);
 }
 
+function boundedProduct(values, limit, message) {
+  let product = 1;
+  for (const value of values) {
+    if (!Number.isSafeInteger(value) || value < 0 || product > Math.floor(limit / value)) throw new Error(message);
+    product *= value;
+  }
+  return product;
+}
+
+function normalizePath(filePath) {
+  const resolved = path.resolve(filePath);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+async function canonicalPath(filePath) {
+  let candidate = path.resolve(filePath);
+  const suffix = [];
+  while (true) {
+    try {
+      const real = await fs.realpath(candidate);
+      return normalizePath(path.join(real, ...suffix));
+    } catch (error) {
+      if (error.code !== "ENOENT") throw new Error(`cannot resolve output path ${filePath}: ${error.message}`);
+      const parent = path.dirname(candidate);
+      if (parent === candidate) return normalizePath(path.join(candidate, ...suffix));
+      suffix.unshift(path.basename(candidate));
+      candidate = parent;
+    }
+  }
+}
+
+function isInside(parent, child) {
+  return child === parent || child.startsWith(`${parent}${path.sep}`);
+}
+
+async function assertSafeOutputs(actionDir, frames, outputPng, outputJson) {
+  const actionPath = await canonicalPath(actionDir);
+  const pngPath = await canonicalPath(outputPng);
+  const jsonPath = await canonicalPath(outputJson);
+  if (pngPath === jsonPath) throw new Error("PNG and JSON outputs must differ");
+  const inputs = await Promise.all(frames.map((frame) => canonicalPath(path.join(actionDir, frame.name))));
+  if (inputs.includes(pngPath) || inputs.includes(jsonPath)) throw new Error("output path collides with an input frame");
+  if (isInside(actionPath, pngPath) || isInside(actionPath, jsonPath)) throw new Error("output path must not be inside the action directory");
+}
+
 async function replaceOutputs(outputPng, outputJson, png, json) {
   const finals = [path.resolve(outputPng), path.resolve(outputJson)];
   if (finals[0] === finals[1]) throw new Error("PNG and JSON outputs must differ");
@@ -61,23 +111,28 @@ async function replaceOutputs(outputPng, outputJson, png, json) {
       await fs.rename(temps[index], finals[index]);
       replaced[index] = true;
     }
-    await Promise.all(backups.map((file) => fs.rm(file, { force: true })));
+    await Promise.allSettled(backups.map((file) => fs.rm(file, { force: true })));
   } catch (error) {
-    await Promise.all(temps.map((file) => fs.rm(file, { force: true })));
-    for (let index = 0; index < finals.length; index += 1) {
-      if (replaced[index]) await fs.rm(finals[index], { force: true });
-      if (backedUp[index]) await fs.rename(backups[index], finals[index]);
-    }
+    const recovered = await Promise.allSettled(finals.map(async (file, index) => {
+      if (replaced[index]) await fs.rm(file, { force: true });
+      if (backedUp[index]) await fs.rename(backups[index], file);
+    }));
+    await Promise.allSettled(temps.map((file) => fs.rm(file, { force: true })));
+    const recoveryErrors = recovered.filter((result) => result.status === "rejected").map((result) => result.reason);
+    if (recoveryErrors.length) throw new AggregateError([error, ...recoveryErrors], "output publish failed and recovery was incomplete");
     throw error;
   }
 }
 
 async function packAction(actionDir, outputPng, outputJson) {
   const frames = await collectFrames(actionDir);
+  await assertSafeOutputs(actionDir, frames, outputPng, outputJson);
   const width = frames[0].width;
   const height = frames[0].height;
-  const sheetWidth = width * frames.length;
-  const pixels = Buffer.alloc(sheetWidth * height * 4);
+  const sheetWidth = boundedProduct([width, frames.length], MAX_SHEET_WIDTH, "sheet width exceeds safety limit");
+  if (height > MAX_SHEET_HEIGHT) throw new Error("sheet height exceeds safety limit");
+  const sheetBytes = boundedProduct([sheetWidth, height, 4], MAX_SHEET_BYTES, "sheet pixel count exceeds safety limit");
+  const pixels = Buffer.alloc(sheetBytes);
   frames.forEach((frame, frameIndex) => {
     for (let row = 0; row < height; row += 1) {
       frame.pixels.copy(pixels, (row * sheetWidth + frameIndex * width) * 4, row * width * 4, (row + 1) * width * 4);

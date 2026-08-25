@@ -8,13 +8,13 @@
       "file": "frame-0001.png",
       "faceBox": { "x": 0, "y": 0, "width": 1, "height": 1 },
       "hitBox": { "x": 0, "y": 0, "width": 2, "height": 2 },
-      "contacts": [{ "x": 1, "y": 2 }],
+      "contacts": [{ "id": "left-foot", "x": 1, "y": 2 }],
       "supportAnchor": { "x": 1, "y": 2 }
     },
     {
       "file": "frame-0002.png",
       "hitBox": { "x": 0, "y": 0, "width": 2, "height": 2 },
-      "contacts": [{ "x": 1, "y": 2 }],
+      "contacts": [{ "id": "left-foot", "x": 1, "y": 2 }],
       "supportAnchor": { "x": 1, "y": 2 }
     }
   ]
