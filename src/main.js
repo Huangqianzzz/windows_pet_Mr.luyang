@@ -2,8 +2,13 @@ const { app, BrowserWindow, ipcMain, Menu, screen } = require("electron");
 const path = require("node:path");
 const { placeBubble } = require("./domain/bubble-placement");
 const { setAutostart, updateAutostartPreference } = require("./runtime/autostart");
-const { loadAnimationBootstrap } = require("./runtime/animation-bootstrap");
+const {
+  loadAnimationBootstrap,
+  poseAnchorsFromManifest
+} = require("./runtime/animation-bootstrap");
+const { createAutonomousRoam } = require("./runtime/autonomous-roam");
 const { createBubbleDisplayMonitor } = require("./runtime/bubble-display-monitor");
+const { createDesktopIconMonitor } = require("./runtime/desktop-icon-monitor");
 const {
   ANIMATION_COMMAND_CHANNEL,
   ANIMATION_COMPLETE_CHANNEL,
@@ -17,13 +22,17 @@ const {
   validatePetAction
 } = require("./runtime/pet-controller");
 const { SettingsStore } = require("./runtime/settings");
+const { runRuntimeTick } = require("./runtime/runtime-tick");
 const {
   createRendererCommandBridge,
   createSpeechFlow,
   speakChinese
 } = require("./runtime/speech");
 const { readTaskbarRects } = require("./windows/taskbar");
+const { getDesktopIconDiagnostic, readDesktopIconRects } = require("./windows/desktop-icons");
 const { createWindowSensor } = require("./windows/window-sensor");
+
+app.disableHardwareAcceleration();
 
 const INTERACTION_COMMAND_CHANNEL = "desktop-pet:interaction-command";
 const INTERACTION_RESULT_CHANNEL = "desktop-pet:interaction-result";
@@ -44,6 +53,9 @@ let frameFaceBox;
 let bubbleReadyPromise = Promise.resolve(false);
 let activeBubbleText;
 let bubbleDisplayMonitor;
+let autonomousRoam;
+let animationBootstrap;
+let desktopIconMonitor;
 
 function secureWebPreferences() {
   return {
@@ -258,6 +270,16 @@ function createRuntime() {
   });
   obstacleIndex.replace("windows", windowSensor.snapshot());
   obstacleIndex.replace("taskbars", readTaskbarRects());
+  desktopIconMonitor = createDesktopIconMonitor({
+    readRects: readDesktopIconRects,
+    getDiagnostic: getDesktopIconDiagnostic,
+    enabled: settingsStore.snapshot().iconCollision,
+    onChange(obstacles) {
+      obstacleIndex.replace("desktop-icons", obstacles);
+      syncControllerObstacles();
+    }
+  });
+  desktopIconMonitor.start();
 
   animationBridge = createAnimationBridge({
     send(command) {
@@ -277,11 +299,13 @@ function createRuntime() {
   controller = new PetController({
     obstacleIndex,
     animationBridge,
+    poseAnchors: poseAnchorsFromManifest(animationBootstrap.manifest, ["sit", "wall-climb", "hang"]),
     body: { ...initialBounds, vx: 0, vy: 0 },
     renderWindow: liveWindowAdapter(() => petWindow, () => repositionSpeechBubble()),
     hitWindow: liveWindowAdapter(() => hitWindow)
   });
   controller.setScale(settingsStore.snapshot().petScale);
+  autonomousRoam = createAutonomousRoam();
   petWindow.webContents.setZoomFactor(settingsStore.snapshot().petScale);
   speechFlow = createSpeechFlow({
     beginSpeech: () => Boolean(controller?.beginSpeech()),
@@ -309,7 +333,15 @@ function createRuntime() {
     const now = Date.now();
     const dtMs = Math.min(100, Math.max(0, now - previousTick));
     previousTick = now;
-    controller?.tick(dtMs);
+    if (controller && autonomousRoam) {
+      runRuntimeTick({
+        controller,
+        roam: autonomousRoam,
+        settings: settingsStore.snapshot(),
+        screen,
+        dtMs
+      });
+    }
   }, 16);
 }
 
@@ -327,6 +359,9 @@ function stopRuntime() {
   animationBridge = undefined;
   rendererCommandBridge = undefined;
   speechFlow = undefined;
+  autonomousRoam = undefined;
+  desktopIconMonitor?.stop();
+  desktopIconMonitor = undefined;
 }
 
 function updateSettings(patch) {
@@ -393,7 +428,7 @@ ipcMain.handle("desktop-pet:get-bootstrap", event => {
   if (!isTrustedIpcSender(event, petWindow)) return { accepted: false };
   return {
     appVersion: app.getVersion(),
-    ...loadAnimationBootstrap()
+    ...animationBootstrap
   };
 });
 
@@ -417,6 +452,11 @@ ipcMain.handle("desktop-pet:update-face-box", (event, faceBox) => {
   repositionSpeechBubble();
   return { accepted: true };
 });
+
+ipcMain.handle("desktop-pet:update-support-anchor", (event, anchor) => ({
+  accepted: isTrustedIpcSender(event, petWindow)
+    && Boolean(controller?.setFrameSupportAnchor(anchor?.action, anchor))
+}));
 
 ipcMain.handle(ANIMATION_COMPLETE_CHANNEL, (event, completion) => ({
   accepted: isTrustedIpcSender(event, petWindow)
@@ -445,6 +485,7 @@ ipcMain.handle("desktop-pet:open-context-menu", event => {
 app.whenReady().then(() => {
   settingsStore = new SettingsStore(path.join(app.getPath("userData"), "settings.json"));
   settingsStore.load();
+  animationBootstrap = loadAnimationBootstrap();
   if (app.isPackaged) {
     const enabled = settingsStore.snapshot().launchAtLogin;
     void setAutostart(enabled, process.execPath).then(result => {

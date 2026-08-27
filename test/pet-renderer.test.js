@@ -31,6 +31,22 @@ test("loads browser-safe animation dependencies before the renderer", () => {
   assert.ok(html.indexOf("../runtime/animation-player.js") < html.indexOf("pet-renderer.js"));
 });
 
+test("left-facing crawl mirrors the sprite and frame geometry inside its source width", () => {
+  const { applyFrame, mirrorBox } = require("../src/render/pet-renderer");
+  const sprite = { style: {} };
+  const action = { sheet: { file: "crawl.png", width: 20, height: 10 } };
+  const frame = { source: { x: 0, y: 0, width: 10, height: 10 } };
+
+  applyFrame(sprite, action, frame, "file:///C:/pet/src/render/pet.html", "left");
+
+  assert.equal(sprite.style.transform, "scaleX(-1)");
+  assert.equal(sprite.style.transformOrigin, "center");
+  assert.deepEqual(mirrorBox({ x: 1, y: 2, width: 3, height: 4 }, 10), {
+    x: 6, y: 2, width: 3, height: 4
+  });
+  assert.throws(() => mirrorBox({ x: 9, y: 0, width: 2, height: 1 }, 10), /inside/);
+});
+
 test("bootstraps idle and applies its first sprite-sheet frame", async () => {
   const root = { children: [], append(child) { this.children.push(child); } };
   const rendererPath = path.join(__dirname, "..", "src", "render", "pet-renderer.js");
@@ -56,6 +72,7 @@ test("bootstraps idle and applies its first sprite-sheet frame", async () => {
   };
   let playedAction;
   const hitBoxes = [];
+  const supportAnchors = [];
   class FakePlayer {
     constructor(receivedManifest) {
       this.manifest = receivedManifest;
@@ -86,6 +103,7 @@ test("bootstraps idle and applies its first sprite-sheet frame", async () => {
   assert.equal(typeof renderer.mountPet, "function");
   const eventTarget = localEventTarget(event => {
     if (event.type === "desktop-pet:frame-hit-box") hitBoxes.push(event.detail);
+    if (event.type === "desktop-pet:frame-support-anchor") supportAnchors.push(event.detail);
   });
   const mounted = renderer.mountPet({
     document: global.document,
@@ -106,6 +124,7 @@ test("bootstraps idle and applies its first sprite-sheet frame", async () => {
   assert.equal(root.children[0].style.backgroundSize, "30px 10px");
   assert.equal(root.children[0].style.backgroundImage, "url(\"file:///C:/pet/assets/animations/sheets/idle.png\")");
   assert.deepEqual(hitBoxes, [{ x: 1, y: 1, width: 8, height: 8 }]);
+  assert.deepEqual(supportAnchors, [{ action: "idle", x: 5, y: 10 }]);
   global.window = previousWindow;
   global.document = previousDocument;
 });

@@ -76,6 +76,30 @@ test("continues to the second Chinese SAPI voice when the first cannot be select
   assert.match(POWERSHELL_SCRIPT, /voiceCulture\s*=\s*\$selectedVoice\.Culture\.Name/);
 });
 
+test("falls back to the Windows SAPI COM voice before reporting Chinese voice missing", () => {
+  const { POWERSHELL_SCRIPT } = require("../src/runtime/speech");
+  const systemSpeech = POWERSHELL_SCRIPT.indexOf("Select-FirstChineseVoice");
+  const comFallback = POWERSHELL_SCRIPT.indexOf("SAPI.SpVoice");
+  const missing = POWERSHELL_SCRIPT.indexOf("reason = 'missing-zh-voice'", comFallback);
+
+  assert.ok(systemSpeech >= 0);
+  assert.ok(comFallback > systemSpeech);
+  assert.ok(missing > comFallback);
+  assert.match(POWERSHELL_SCRIPT, /GetAttribute\('Language'\)/);
+  assert.match(POWERSHELL_SCRIPT, /voiceCulture\s*=\s*\$comCulture/);
+});
+
+test("a broken System.Speech voice registry still reaches the SAPI COM fallback", () => {
+  const { POWERSHELL_SCRIPT } = require("../src/runtime/speech");
+  const enumeration = POWERSHELL_SCRIPT.indexOf("GetInstalledVoices()");
+  const comFallback = POWERSHELL_SCRIPT.indexOf("SAPI.SpVoice");
+  const guardedSection = POWERSHELL_SCRIPT.slice(enumeration, comFallback);
+
+  assert.ok(enumeration >= 0);
+  assert.ok(comFallback > enumeration);
+  assert.match(guardedSection, /catch\s*\{\s*\$selectedVoice\s*=\s*\$null/s);
+});
+
 test("the PowerShell selector tries a second zh voice after the first SelectVoice failure", {
   skip: process.platform !== "win32"
 }, () => {
@@ -378,7 +402,7 @@ test("a renderer command that times out before bootstrap ready expires without c
   assert.equal(bridge.complete(results[0]), false);
 });
 
-test("menu keeps the exact preview labels and disables unfinished duel actions", () => {
+test("release menu hides deferred duel actions while keeping person-pet controls", () => {
   const { MENU_LABELS, createMenuTemplate, isMenuAction } = require("../src/runtime/menu");
   const template = createMenuTemplate({
     settings: {
@@ -395,8 +419,6 @@ test("menu keeps the exact preview labels and disables unfinished duel actions",
     "叫“爸爸”",
     "说“我错了”",
     "原地休息/恢复活动",
-    "挑战螃蟹",
-    "自动约战",
     "自主活动",
     "桌宠大小",
     "语音音量",
@@ -405,8 +427,8 @@ test("menu keeps the exact preview labels and disables unfinished duel actions",
     "退出"
   ]);
   assert.deepEqual(template.map(item => item.label), MENU_LABELS);
-  assert.equal(template.find(item => item.label === "挑战螃蟹").enabled, false);
-  assert.equal(template.find(item => item.label === "自动约战").enabled, false);
+  assert.equal(template.some(item => item.label === "挑战螃蟹"), false);
+  assert.equal(template.some(item => item.label === "自动约战"), false);
   assert.equal(isMenuAction("speak-father"), true);
   assert.equal(isMenuAction("quit; Remove-Item C:\\"), false);
 

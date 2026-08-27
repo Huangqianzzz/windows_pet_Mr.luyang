@@ -61,6 +61,9 @@ function reducePetState(state, event) {
   if (state.mode === "landing" && event?.type === "ACTION_COMPLETE") {
     return initialState();
   }
+  if (state.mode === "crawling" && event?.type === "CRAWL_COMPLETE") {
+    return initialState();
+  }
   if (!canInterrupt(state, event?.type)) return state;
 
   return Object.freeze({ mode: EVENT_MODES[event.type] });

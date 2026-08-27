@@ -84,6 +84,8 @@ test("hit document is local-only and loads no renderer dependencies beyond its b
 test("main configures a separate focusable hit window and a mouse-transparent render window", () => {
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "main.js"), "utf8");
 
+  assert.ok(main.indexOf("app.disableHardwareAcceleration()") >= 0);
+  assert.ok(main.indexOf("app.disableHardwareAcceleration()") < main.indexOf("app.whenReady()"));
   assert.match(main, /petWindow\.setIgnoreMouseEvents\(true\)/);
   assert.match(main, /hitWindow\s*=\s*new BrowserWindow\(\{[\s\S]*?transparent:\s*true/);
   assert.match(main, /hitWindow\s*=\s*new BrowserWindow\(\{[\s\S]*?frame:\s*false/);
@@ -95,6 +97,9 @@ test("main configures a separate focusable hit window and a mouse-transparent re
   assert.match(main, /validatePetAction/);
   assert.match(main, /createAnimationBridge/);
   assert.match(main, /ANIMATION_COMPLETE_CHANNEL/);
+  assert.match(main, /createDesktopIconMonitor/);
+  assert.match(main, /obstacleIndex\.replace\("desktop-icons", obstacles\)/);
+  assert.match(main, /desktop-pet:update-support-anchor/);
   assert.doesNotMatch(main, /AnimationPlayer/);
 });
 
@@ -169,15 +174,19 @@ test("preload keeps three public APIs and validates internal animation and frame
   localHandlers.get("desktop-pet:frame-hit-box")({
     detail: { x: 1, y: 2, width: 0, height: 4 }
   });
+  localHandlers.get("desktop-pet:frame-support-anchor")({
+    detail: { action: "wall-climb", x: 69, y: 8 }
+  });
   localHandlers.get("desktop-pet:animation-complete")({ detail: { id: 1 } });
   localHandlers.get("desktop-pet:interaction-result")({
     detail: { id: 4, accepted: false, reason: "expired" }
   });
   await Promise.resolve();
 
-  assert.deepEqual(invokes.slice(-4).map(args => JSON.parse(JSON.stringify(args))), [
+  assert.deepEqual(invokes.slice(-5).map(args => JSON.parse(JSON.stringify(args))), [
     ["desktop-pet:update-hit-box", { x: 1, y: 2, width: 3, height: 4 }],
     ["desktop-pet:update-hit-box", null],
+    ["desktop-pet:update-support-anchor", { action: "wall-climb", x: 69, y: 8 }],
     ["desktop-pet:animation-complete", { id: 1 }],
     ["desktop-pet:interaction-result", { id: 4, accepted: false, reason: "expired" }]
   ]);

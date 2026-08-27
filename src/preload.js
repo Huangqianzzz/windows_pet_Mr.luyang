@@ -14,6 +14,7 @@ const ANIMATION_ACTIONS = new Set([
   "fall"
 ]);
 const FORCE_ACTIONS = new Set(["fall", "land"]);
+const FACINGS = new Set(["left", "right"]);
 const INTERACTION_TYPES = new Set(["kneel", "freeze", "resume", "recover"]);
 const RECOVERY_ACTIONS = new Set([
   "idle",
@@ -34,11 +35,16 @@ function exactKeys(value, keys) {
 }
 
 function animationCommand(value) {
-  if (!exactKeys(value, ["id", "action", "force"])) return null;
+  const base = exactKeys(value, ["id", "action", "force"]);
+  const directed = exactKeys(value, ["id", "action", "force", "facing"]);
+  if (!base && !directed) return null;
   if (!Number.isSafeInteger(value.id) || value.id <= 0) return null;
   if (!ANIMATION_ACTIONS.has(value.action) || typeof value.force !== "boolean") return null;
   if (value.force && !FORCE_ACTIONS.has(value.action)) return null;
-  return { id: value.id, action: value.action, force: value.force };
+  if (directed && !FACINGS.has(value.facing)) return null;
+  return directed
+    ? { id: value.id, action: value.action, force: value.force, facing: value.facing }
+    : { id: value.id, action: value.action, force: value.force };
 }
 
 function animationCompletion(value) {
@@ -51,6 +57,12 @@ function frameHitBox(value) {
   if (![value.x, value.y, value.width, value.height].every(Number.isFinite)) return null;
   if (value.x < 0 || value.y < 0 || value.width <= 0 || value.height <= 0) return null;
   return { x: value.x, y: value.y, width: value.width, height: value.height };
+}
+
+function frameSupportAnchor(value) {
+  if (!exactKeys(value, ["action", "x", "y"]) || !ANIMATION_ACTIONS.has(value.action)) return null;
+  if (![value.x, value.y].every(Number.isFinite) || value.x < 0 || value.y < 0) return null;
+  return { action: value.action, x: value.x, y: value.y };
 }
 
 function interactionCommand(value) {
@@ -113,6 +125,11 @@ window.addEventListener("desktop-pet:frame-hit-box", event => {
 
 window.addEventListener("desktop-pet:frame-face-box", event => {
   invokeInternal("desktop-pet:update-face-box", frameHitBox(event.detail));
+});
+
+window.addEventListener("desktop-pet:frame-support-anchor", event => {
+  const anchor = frameSupportAnchor(event.detail);
+  if (anchor) invokeInternal("desktop-pet:update-support-anchor", anchor);
 });
 
 window.addEventListener("desktop-pet:interaction-result", event => {

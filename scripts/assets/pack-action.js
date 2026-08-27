@@ -135,7 +135,19 @@ async function packAction(actionDir, outputPng, outputJson) {
   const pixels = Buffer.alloc(sheetBytes);
   frames.forEach((frame, frameIndex) => {
     for (let row = 0; row < height; row += 1) {
-      frame.pixels.copy(pixels, (row * sheetWidth + frameIndex * width) * 4, row * width * 4, (row + 1) * width * 4);
+      for (let column = 0; column < width; column += 1) {
+        const source = (row * width + column) * 4;
+        const target = (row * sheetWidth + frameIndex * width + column) * 4;
+        const red = frame.pixels[source];
+        const green = frame.pixels[source + 1];
+        const blue = frame.pixels[source + 2];
+        const alpha = frame.pixels[source + 3];
+        const visibleChroma = alpha > 0 && (
+          (red === 255 && green === 0 && blue === 255)
+          || (alpha <= 64 && red >= 190 && blue >= 190 && green <= 32 && Math.abs(red - blue) <= 32)
+        );
+        if (!visibleChroma) frame.pixels.copy(pixels, target, source, source + 4);
+      }
     }
   });
   const manifest = {

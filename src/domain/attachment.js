@@ -1,8 +1,8 @@
 const { nearestEdge } = require("./geometry");
 
 const RELEASE_POSES = Object.freeze({
-  top: Object.freeze(["sit", "prone", "legs-dangle"]),
-  side: Object.freeze(["wall-grab", "wall-climb"]),
+  top: Object.freeze(["sit"]),
+  side: Object.freeze(["wall-climb"]),
   bottom: Object.freeze(["hang"]),
   open: Object.freeze(["land", "crawl"])
 });

@@ -31,6 +31,7 @@ function createHarness(overrides = {}) {
       showInactive() { hitEvents.push({ type: "show" }); }
     },
     choosePose: overrides.choosePose || (choices => choices[0]),
+    poseAnchors: overrides.poseAnchors,
     gravity: overrides.gravity ?? 1000,
     releaseThreshold: 12
   });
@@ -45,12 +46,12 @@ function attachToTop(harness, target) {
 }
 
 test("drag release attaches with an injected pose and follows target move and resize", () => {
-  const harness = createHarness({ choosePose: choices => choices[1] });
+  const harness = createHarness({ choosePose: choices => choices[0] });
   const target = obstacle("window:42", { x: 100, y: 100, width: 400, height: 300 });
 
   const release = attachToTop(harness, target);
 
-  assert.deepEqual(release, { accepted: true, zone: "top", pose: "prone" });
+  assert.deepEqual(release, { accepted: true, zone: "top", pose: "sit" });
   assert.equal(harness.controller.snapshot().state.mode, "attached");
   assert.equal(harness.controller.snapshot().attachment.target.id, "window:42");
   assert.equal(harness.controller.snapshot().attachment.t, 0.25);
@@ -64,6 +65,79 @@ test("drag release attaches with an injected pose and follows target move and re
   assert.deepEqual(harness.renderBounds.at(-1), { x: 400, y: 80, width: 20, height: 30 });
   assert.deepEqual(harness.controller.snapshot().attachment.lastRect,
     { x: 200, y: 80, width: 800, height: 500 });
+});
+
+test("attachment support anchors place top, side, and bottom poses on the window edge", () => {
+  const target = obstacle("window:anchor", { x: 100, y: 100, width: 400, height: 300 });
+  const poseAnchors = {
+    sit: { x: 10, y: 20 },
+    "wall-climb": { x: 18, y: 15 },
+    hang: { x: 10, y: 2 }
+  };
+
+  const top = createHarness({ poseAnchors });
+  top.obstacleIndex.replace("windows", [target]);
+  top.controller.handleInput("drag-start", { x: 0, y: 0 });
+  top.controller.handleInput("drag-end", { x: 200, y: 101 });
+  assert.deepEqual(top.renderBounds.at(-1), { x: 190, y: 80, width: 20, height: 30 });
+
+  const right = createHarness({ poseAnchors });
+  right.obstacleIndex.replace("windows", [target]);
+  right.controller.handleInput("drag-start", { x: 0, y: 0 });
+  const sideRelease = right.controller.handleInput("drag-end", { x: 501, y: 200 });
+  assert.equal(sideRelease.pose, "wall-climb");
+  assert.deepEqual(right.renderBounds.at(-1), { x: 498, y: 185, width: 20, height: 30 });
+  assert.equal(right.played.at(-1).options.facing, "left");
+
+  const bottom = createHarness({ poseAnchors });
+  bottom.obstacleIndex.replace("windows", [target]);
+  bottom.controller.handleInput("drag-start", { x: 0, y: 0 });
+  const bottomRelease = bottom.controller.handleInput("drag-end", { x: 200, y: 399 });
+  assert.equal(bottomRelease.pose, "hang");
+  assert.deepEqual(bottom.renderBounds.at(-1), { x: 190, y: 398, width: 20, height: 30 });
+});
+
+test("resizing an attached pose keeps its support anchor fixed to the window edge", () => {
+  const harness = createHarness({ poseAnchors: { sit: { x: 10, y: 20 } } });
+  harness.obstacleIndex.replace("windows", [
+    obstacle("window:scale-anchor", { x: 100, y: 100, width: 400, height: 300 })
+  ]);
+  harness.controller.handleInput("drag-start", { x: 0, y: 0 });
+  harness.controller.handleInput("drag-end", { x: 200, y: 101 });
+
+  assert.equal(harness.controller.setScale(2), true);
+  assert.deepEqual(harness.renderBounds.at(-1), { x: 180, y: 60, width: 40, height: 60 });
+});
+
+test("every wall-climb frame support anchor stays fixed to either window side at every scale", () => {
+  const anchors = [
+    { x: 69, y: 8 },
+    { x: 96, y: 80 },
+    { x: 121, y: 8 }
+  ];
+  for (const { releaseX, facing } of [
+    { releaseX: 99, facing: "right" },
+    { releaseX: 501, facing: "left" }
+  ]) {
+    for (const scale of [1, 1.5, 2]) {
+      const harness = createHarness({ poseAnchors: { "wall-climb": anchors[0] } });
+      const target = obstacle("window:wall", { x: 100, y: 100, width: 400, height: 300 });
+      harness.obstacleIndex.replace("windows", [target]);
+      harness.controller.handleInput("drag-start", { x: 0, y: 0 });
+      harness.controller.handleInput("drag-end", { x: releaseX, y: 200 });
+      harness.controller.setScale(scale);
+
+      for (const anchor of anchors) {
+        assert.equal(harness.controller.setFrameSupportAnchor("wall-climb", anchor), true);
+        const body = harness.controller.snapshot().body;
+        const renderedAnchorX = facing === "left"
+          ? body.x + body.width - anchor.x * scale
+          : body.x + anchor.x * scale;
+        assert.equal(renderedAnchorX, releaseX < 100 ? 100 : 500);
+        assert.equal(body.y + anchor.y * scale, 200);
+      }
+    }
+  }
 });
 
 test("a minimized or closed target disappears and starts falling without stale hit input", () => {
@@ -156,7 +230,7 @@ test("explicit resume restores the safe state captured before exact-frame rest",
 });
 
 test("speech has an explicit safe recovery state and support loss overrides it", () => {
-  const harness = createHarness({ choosePose: choices => choices[1] });
+  const harness = createHarness({ choosePose: choices => choices[0] });
   const target = obstacle("window:speech", { x: 0, y: 20, width: 100, height: 20 });
   harness.obstacleIndex.replace("windows", [target]);
   harness.controller.handleInput("drag-start", { x: 0, y: 0 });
@@ -164,7 +238,7 @@ test("speech has an explicit safe recovery state and support loss overrides it",
 
   assert.equal(harness.controller.beginSpeech(), true);
   assert.equal(harness.controller.snapshot().state.mode, "speaking");
-  assert.equal(harness.controller.finishSpeech(), "prone");
+  assert.equal(harness.controller.finishSpeech(), "sit");
   assert.equal(harness.controller.snapshot().state.mode, "attached");
 
   assert.equal(harness.controller.beginSpeech(), true);
@@ -190,7 +264,7 @@ test("attached and crawling speech flows recover controller state with the match
   const cases = [
     {
       expectedMode: "attached",
-      expectedAction: "legs-dangle",
+      expectedAction: "sit",
       prepare(harness) {
         attachToTop(harness, obstacle("window:flow", { x: 100, y: 100, width: 400, height: 300 }));
       }
@@ -318,4 +392,49 @@ test("input action validator accepts only exact drag actions and finite screen p
   assert.equal(validatePetAction("duel-start", { x: 0, y: 0 }), null);
   assert.equal(validatePetAction("drag-move", { x: Number.NaN, y: 0 }), null);
   assert.equal(validatePetAction("drag-end", { x: 0, y: 0, command: "quit" }), null);
+});
+
+test("autonomous crawl starts, moves inside the work area, blocks on obstacles, and stops", () => {
+  const harness = createHarness();
+  const workArea = { x: 0, y: 0, width: 100, height: 100 };
+
+  assert.equal(harness.controller.startCrawl("left"), true);
+  assert.equal(harness.controller.snapshot().state.mode, "crawling");
+  assert.equal(harness.played.at(-1).action, "crawl");
+  assert.equal(harness.played.at(-1).options.facing, "left");
+  assert.equal(harness.controller.setCrawlDirection("right"), true);
+  assert.equal(harness.played.at(-1).options.facing, "right");
+  assert.equal(harness.controller.setCrawlDirection("up"), false);
+  assert.deepEqual(harness.controller.moveCrawl(10, 5, workArea), { moved: true, blocked: false });
+  assert.deepEqual(harness.controller.snapshot().body, {
+    x: 10, y: 5, width: 20, height: 30, vx: 0, vy: 0
+  });
+
+  harness.obstacleIndex.replace("windows", [
+    obstacle("window:block", { x: 35, y: 0, width: 20, height: 100 })
+  ]);
+  assert.deepEqual(harness.controller.moveCrawl(10, 0, workArea), { moved: false, blocked: true });
+  assert.equal(harness.controller.snapshot().body.x, 10);
+
+  harness.obstacleIndex.replace("windows", [
+    obstacle("window:under-pet", { x: 0, y: 0, width: 30, height: 100 })
+  ]);
+  assert.deepEqual(harness.controller.moveCrawl(5, 0, workArea), { moved: true, blocked: false });
+  assert.equal(harness.controller.snapshot().body.x, 15);
+
+  harness.obstacleIndex.replace("windows", [
+    obstacle("window:covers-pet", { x: 0, y: 0, width: 80, height: 100 })
+  ]);
+  for (let step = 0; step < 13; step += 1) {
+    assert.deepEqual(harness.controller.moveCrawl(5, 0, workArea), { moved: true, blocked: false });
+  }
+  assert.equal(harness.controller.snapshot().body.x, 80);
+
+  harness.obstacleIndex.replace("windows", []);
+  assert.deepEqual(harness.controller.moveCrawl(-100, 0, workArea), { moved: true, blocked: true });
+  assert.equal(harness.controller.snapshot().body.x, 0);
+  assert.equal(harness.controller.stopCrawl(), true);
+  assert.equal(harness.controller.snapshot().state.mode, "idle");
+  assert.equal(harness.played.at(-1).action, "idle");
+  assert.equal(harness.controller.startCrawl("up"), false);
 });

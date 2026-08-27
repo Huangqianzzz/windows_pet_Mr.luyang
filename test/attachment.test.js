@@ -29,7 +29,7 @@ test("stores target identity, clamps t, and refreshes the last target rectangle"
     hwnd: 42,
     rect: { x: 10, y: 20, width: 100, height: 80 }
   };
-  const anchor = createAttachment(target, "right", 2, "wall-grab");
+  const anchor = createAttachment(target, "right", 2, "wall-climb");
   const resolved = resolveAttachment(anchor, { x: -50, y: 40, width: 200, height: 120 });
 
   assert.deepEqual(anchor.target, { source: "window", id: "window:42", hwnd: 42 });
@@ -68,11 +68,11 @@ test("rejects invalid rectangles and edge-pose combinations", () => {
 });
 
 test("exposes only the exact release poses and accepts an injected deterministic choice", () => {
-  assert.deepEqual(releasePoseOptions("top"), ["sit", "prone", "legs-dangle"]);
-  assert.deepEqual(releasePoseOptions("side"), ["wall-grab", "wall-climb"]);
+  assert.deepEqual(releasePoseOptions("top"), ["sit"]);
+  assert.deepEqual(releasePoseOptions("side"), ["wall-climb"]);
   assert.deepEqual(releasePoseOptions("bottom"), ["hang"]);
   assert.deepEqual(releasePoseOptions("open"), ["land", "crawl"]);
-  assert.equal(chooseReleasePose("top", choices => choices[2]), "legs-dangle");
+  assert.equal(chooseReleasePose("top", choices => choices[0]), "sit");
   assert.throws(() => chooseReleasePose("bottom", () => "sit"), /allowed/);
 });
 

@@ -20,13 +20,32 @@
     return url.href;
   }
 
-  function applyFrame(sprite, action, frame, locationHref) {
+  function mirrorBox(box, sourceWidth) {
+    if (!box || ![box.x, box.y, box.width, box.height, sourceWidth].every(Number.isFinite)
+      || box.x < 0 || box.y < 0 || box.width <= 0 || box.height <= 0
+      || box.x + box.width > sourceWidth) {
+      throw new RangeError("box must be inside the source width");
+    }
+    return { ...box, x: sourceWidth - box.x - box.width };
+  }
+
+  function mirrorPoint(point, sourceWidth) {
+    if (!point || ![point.x, point.y, sourceWidth].every(Number.isFinite)
+      || point.x < 0 || point.y < 0 || point.x > sourceWidth) {
+      throw new RangeError("point must be inside the source width");
+    }
+    return { ...point, x: sourceWidth - point.x };
+  }
+
+  function applyFrame(sprite, action, frame, locationHref, facing = "right") {
     const { source } = frame;
     sprite.style.width = `${source.width}px`;
     sprite.style.height = `${source.height}px`;
     sprite.style.backgroundImage = `url("${animationAssetUrl(action.sheet.file, locationHref)}")`;
     sprite.style.backgroundPosition = `${-source.x}px ${-source.y}px`;
     sprite.style.backgroundSize = `${action.sheet.width}px ${action.sheet.height}px`;
+    sprite.style.transform = facing === "left" ? "scaleX(-1)" : "none";
+    sprite.style.transformOrigin = "center";
   }
 
   function dispatchDetail(eventTarget, type, detail) {
@@ -71,16 +90,27 @@
     root.append(sprite);
 
     let player;
+    let currentFacing = "right";
     const pendingCommands = [];
     const pendingInteractions = [];
     const reportFrame = (frame, _frameIndex, actionName) => {
-      dispatchDetail(eventTarget, animationProtocol.FRAME_HIT_BOX_EVENT, frame.hitBox);
-      dispatchDetail(eventTarget, "desktop-pet:frame-face-box", frame.faceBox);
-      applyFrame(sprite, player.manifest.actions[actionName], frame, locationHref);
+      const hitBox = currentFacing === "left" ? mirrorBox(frame.hitBox, frame.source.width) : frame.hitBox;
+      const faceBox = currentFacing === "left" ? mirrorBox(frame.faceBox, frame.source.width) : frame.faceBox;
+      dispatchDetail(eventTarget, animationProtocol.FRAME_HIT_BOX_EVENT, hitBox);
+      dispatchDetail(eventTarget, "desktop-pet:frame-face-box", faceBox);
+      if (frame.supportAnchor && [frame.supportAnchor.x, frame.supportAnchor.y].every(Number.isFinite)) {
+        dispatchDetail(eventTarget, "desktop-pet:frame-support-anchor", {
+          action: actionName,
+          x: frame.supportAnchor.x,
+          y: frame.supportAnchor.y
+        });
+      }
+      applyFrame(sprite, player.manifest.actions[actionName], frame, locationHref, currentFacing);
     };
     const playCommand = rawCommand => {
       const command = animationProtocol.validateAnimationCommand(rawCommand);
       if (!command || !player) return false;
+      if (command.facing) currentFacing = command.facing;
       const actionName = player.manifest.actions[command.action] ? command.action : "idle";
       let completed = false;
       const complete = () => {
@@ -163,7 +193,7 @@
     return { sprite, ready };
   }
 
-  const api = { animationAssetUrl, applyFrame, mountPet, validateInteractionCommand };
+  const api = { animationAssetUrl, applyFrame, mirrorBox, mirrorPoint, mountPet, validateInteractionCommand };
   if (typeof module === "object" && module.exports) {
     module.exports = api;
     return;

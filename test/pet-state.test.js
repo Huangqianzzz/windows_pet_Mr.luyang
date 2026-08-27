@@ -83,3 +83,9 @@ test("support loss remains an explicit high-priority exit from attachment", () =
 
   assert.equal(reducePetState(attached, { type: "SUPPORT_LOST" }).mode, "falling");
 });
+
+test("autonomous crawl completes explicitly back to idle", () => {
+  const crawling = reducePetState(initialState(), { type: "CRAWL" });
+  assert.equal(crawling.mode, "crawling");
+  assert.deepEqual(reducePetState(crawling, { type: "CRAWL_COMPLETE" }), { mode: "idle" });
+});

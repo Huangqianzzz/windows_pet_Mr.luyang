@@ -31,9 +31,44 @@ ${POWERSHELL_VOICE_SELECTOR}
 $request = ([Console]::In.ReadToEnd() | ConvertFrom-Json)
 $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
 try {
-  $voices = $synth.GetInstalledVoices() | ForEach-Object { $_.VoiceInfo } | Where-Object { $_.Culture.Name -like 'zh-*' }
-  $selectedVoice = Select-FirstChineseVoice -Synth $synth -Voices $voices
+  try {
+    $voices = $synth.GetInstalledVoices() | ForEach-Object { $_.VoiceInfo } | Where-Object { $_.Culture.Name -like 'zh-*' }
+    $selectedVoice = Select-FirstChineseVoice -Synth $synth -Voices $voices
+  } catch {
+    $selectedVoice = $null
+  }
   if ($null -eq $selectedVoice) {
+    $comSynth = $null
+    $comCulture = $null
+    try {
+      $comSynth = New-Object -ComObject SAPI.SpVoice
+      foreach ($token in @($comSynth.GetVoices())) {
+        foreach ($language in ([string]$token.GetAttribute('Language') -split ';')) {
+          try {
+            $culture = [Globalization.CultureInfo]::GetCultureInfo([Convert]::ToInt32($language, 16))
+          } catch {
+            continue
+          }
+          if ($culture.Name -notlike 'zh-*') { continue }
+          $comSynth.Voice = $token
+          $comSynth.Volume = [int]$request.volume
+          $null = $comSynth.Speak([string]$request.text)
+          $comCulture = $culture.Name
+          break
+        }
+        if ($null -ne $comCulture) { break }
+      }
+    } catch {
+      $comCulture = $null
+    } finally {
+      if ($null -ne $comSynth) {
+        $null = [Runtime.InteropServices.Marshal]::FinalReleaseComObject($comSynth)
+      }
+    }
+    if ($null -ne $comCulture) {
+      [Console]::Out.WriteLine((@{ spoken = $true; voiceCulture = $comCulture } | ConvertTo-Json -Compress))
+      exit 0
+    }
     [Console]::Out.WriteLine((@{ spoken = $false; reason = 'missing-zh-voice' } | ConvertTo-Json -Compress))
     exit 0
   }

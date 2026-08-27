@@ -37,9 +37,14 @@ test("validator reports exact paths for missing, changed, and unexpected sources
   assert.deepEqual(result.unexpected, [unexpectedPath]);
 });
 
-test("the installer excludes private source photos while retaining generated assets", () => {
+test("the installer includes only runtime sheets and excludes private and working assets", () => {
   const packageJson = require(path.join(projectRoot, "package.json"));
 
-  assert.deepEqual(packageJson.build.files, ["src/**/*", "assets/**/*", "!assets/source/**/*"]);
+  assert.deepEqual(packageJson.build.files, [
+    "src/**/*",
+    "assets/animations/manifest.json",
+    ...["idle", "crawl", "kneel", "sit", "hang", "wall-climb", "drag", "fall", "land"]
+      .map(name => `assets/animations/sheets/${name}.png`)
+  ]);
   assert.match(packageJson.scripts.test, /test\/assets\/\*\.test\.js/);
 });

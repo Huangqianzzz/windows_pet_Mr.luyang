@@ -2,8 +2,6 @@ const MENU_LABELS = Object.freeze([
   "叫“爸爸”",
   "说“我错了”",
   "原地休息/恢复活动",
-  "挑战螃蟹",
-  "自动约战",
   "自主活动",
   "桌宠大小",
   "语音音量",
@@ -42,11 +40,9 @@ function createMenuTemplate({ settings, resting = false, onAction }) {
     { label: MENU_LABELS[0], click: action(onAction, "speak-father") },
     { label: MENU_LABELS[1], click: action(onAction, "speak-apology") },
     { label: MENU_LABELS[2], type: "checkbox", checked: resting, click: action(onAction, "toggle-rest") },
-    { label: MENU_LABELS[3], enabled: false },
-    { label: MENU_LABELS[4], type: "checkbox", checked: settings.autoDuel, enabled: false },
-    { label: MENU_LABELS[5], type: "checkbox", checked: settings.autonomousActivity, click: action(onAction, "toggle-autonomous") },
+    { label: MENU_LABELS[3], type: "checkbox", checked: settings.autonomousActivity, click: action(onAction, "toggle-autonomous") },
     {
-      label: MENU_LABELS[6],
+      label: MENU_LABELS[4],
       submenu: scaleValues.map(value => ({
         label: `${Math.round(value * 100)}%`,
         type: "radio",
@@ -55,7 +51,7 @@ function createMenuTemplate({ settings, resting = false, onAction }) {
       }))
     },
     {
-      label: MENU_LABELS[7],
+      label: MENU_LABELS[5],
       submenu: volumeValues.map(value => ({
         label: `${value}%`,
         type: "radio",
@@ -63,9 +59,9 @@ function createMenuTemplate({ settings, resting = false, onAction }) {
         click: action(onAction, "set-volume", value)
       }))
     },
-    { label: MENU_LABELS[8], type: "checkbox", checked: settings.launchAtLogin, click: action(onAction, "toggle-autostart") },
-    { label: MENU_LABELS[9], click: action(onAction, "open-settings") },
-    { label: MENU_LABELS[10], click: action(onAction, "quit") }
+    { label: MENU_LABELS[6], type: "checkbox", checked: settings.launchAtLogin, click: action(onAction, "toggle-autostart") },
+    { label: MENU_LABELS[7], click: action(onAction, "open-settings") },
+    { label: MENU_LABELS[8], click: action(onAction, "quit") }
   ];
 }
 

@@ -2,8 +2,8 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-const VALUE_NAME = "Desktop Pet Suite";
-const SUITE_EXECUTABLES = new Set(["desktop pet suite.exe", "desktop-pet-suite.exe"]);
+const VALUE_NAME = "人物桌宠";
+const SUITE_EXECUTABLES = new Set(["人物桌宠.exe", "desktop pet suite.exe", "desktop-pet-suite.exe"]);
 
 function validLauncher(launcherPath) {
   return typeof launcherPath === "string"

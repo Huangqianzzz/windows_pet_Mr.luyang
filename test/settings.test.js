@@ -115,7 +115,7 @@ function successfulSpawn(calls) {
 test("registers and cancels only the suite launcher in the unelevated HKCU Run key", async () => {
   const { setAutostart } = require("../src/runtime/autostart");
   const calls = [];
-  const launcher = "C:\\Program Files\\Desktop Pet Suite\\Desktop Pet Suite.exe";
+  const launcher = "C:\\Program Files\\人物桌宠\\人物桌宠.exe";
 
   assert.deepEqual(await setAutostart(true, launcher, {
     platform: "win32",
@@ -131,7 +131,7 @@ test("registers and cancels only the suite launcher in the unelevated HKCU Run k
     "ADD",
     "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
     "/v",
-    "Desktop Pet Suite",
+    "人物桌宠",
     "/t",
     "REG_SZ"
   ]);
@@ -142,7 +142,7 @@ test("registers and cancels only the suite launcher in the unelevated HKCU Run k
     "DELETE",
     "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
     "/v",
-    "Desktop Pet Suite"
+    "人物桌宠"
   ]);
 });
 

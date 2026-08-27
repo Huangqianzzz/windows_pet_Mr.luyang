@@ -56,13 +56,18 @@ test("animation bridge validates force policy and completes a command once", () 
   assert.equal(bridge.play("sit", { onComplete: () => { completions += 1; } }), true);
   assert.equal(bridge.play("sit", { force: true }), false);
   assert.equal(bridge.play("fall", { force: true }), true);
+  assert.equal(bridge.play("crawl", { facing: "left" }), true);
+  assert.equal(bridge.play("crawl", { facing: "up" }), false);
   assert.equal(bridge.play("unknown-action"), false);
   assert.deepEqual(sent, [
     { id: 1, action: "sit", force: false },
-    { id: 2, action: "fall", force: true }
+    { id: 2, action: "fall", force: true },
+    { id: 3, action: "crawl", force: false, facing: "left" }
   ]);
   assert.deepEqual(validateAnimationCommand(sent[0]), sent[0]);
-  assert.equal(validateAnimationCommand({ id: 3, action: "crawl", force: true }), null);
+  assert.deepEqual(validateAnimationCommand(sent[2]), sent[2]);
+  assert.equal(validateAnimationCommand({ id: 4, action: "crawl", force: true }), null);
+  assert.equal(validateAnimationCommand({ id: 4, action: "crawl", force: false, facing: "up" }), null);
 
   assert.equal(bridge.complete({ id: 1 }), true);
   assert.equal(bridge.complete({ id: 1 }), false);

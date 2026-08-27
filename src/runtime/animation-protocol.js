@@ -18,17 +18,23 @@
     "fall"
   ]);
   const FORCE_ACTIONS = Object.freeze(["fall", "land"]);
+  const FACINGS = Object.freeze(["left", "right"]);
 
   function validateAnimationCommand(command) {
     if (!command || typeof command !== "object") return null;
     const keys = Object.keys(command);
-    if (keys.length !== 3 || !keys.includes("id") || !keys.includes("action") || !keys.includes("force")) {
+    const hasBaseKeys = keys.includes("id") && keys.includes("action") && keys.includes("force");
+    if (!hasBaseKeys || (keys.length !== 3 && keys.length !== 4)
+      || (keys.length === 4 && !keys.includes("facing"))) {
       return null;
     }
     if (!Number.isSafeInteger(command.id) || command.id <= 0) return null;
     if (!ANIMATION_ACTIONS.includes(command.action) || typeof command.force !== "boolean") return null;
     if (command.force && !FORCE_ACTIONS.includes(command.action)) return null;
-    return Object.freeze({ id: command.id, action: command.action, force: command.force });
+    if (command.facing !== undefined && !FACINGS.includes(command.facing)) return null;
+    return Object.freeze(command.facing === undefined
+      ? { id: command.id, action: command.action, force: command.force }
+      : { id: command.id, action: command.action, force: command.force, facing: command.facing });
   }
 
   function validateAnimationCompletion(completion) {
@@ -44,9 +50,11 @@
     const completions = new Map();
 
     return Object.freeze({
-      play(action, { force = false, onComplete } = {}) {
+      play(action, { force = false, onComplete, facing } = {}) {
         if (onComplete !== undefined && typeof onComplete !== "function") return false;
-        const command = validateAnimationCommand({ id: nextId, action, force });
+        const command = validateAnimationCommand(facing === undefined
+          ? { id: nextId, action, force }
+          : { id: nextId, action, force, facing });
         if (!command) return false;
         let sent = false;
         try {

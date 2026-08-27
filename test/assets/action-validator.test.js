@@ -358,3 +358,26 @@ test("packs exact numeric frame names deterministically without partial output o
   await assert.rejects(() => fs.stat(brokenPng), /ENOENT/);
   await assert.rejects(() => fs.stat(brokenJson), /ENOENT/);
 });
+
+test("clears visible chroma-key pixels and low-alpha fringes while packing", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "desktop-pet-chroma-"));
+  const outputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "desktop-pet-chroma-sheet-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  t.after(() => fs.rm(outputDirectory, { recursive: true, force: true }));
+  await fs.writeFile(
+    path.join(directory, "frame-0001.png"),
+    png(3, 1, Buffer.from([
+      255, 0, 255, 1,
+      201, 0, 201, 19,
+      230, 24, 230, 255
+    ]))
+  );
+
+  const outputPng = path.join(outputDirectory, "sheet.png");
+  await packAction(directory, outputPng, path.join(outputDirectory, "sheet.json"));
+  const packed = await readPng(outputPng);
+
+  assert.deepEqual([...packed.pixels.subarray(0, 4)], [0, 0, 0, 0]);
+  assert.deepEqual([...packed.pixels.subarray(4, 8)], [0, 0, 0, 0]);
+  assert.deepEqual([...packed.pixels.subarray(8, 12)], [230, 24, 230, 255]);
+});

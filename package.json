@@ -1,6 +1,7 @@
 {
   "name": "desktop-pet-suite",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "Windows 10/11 x64 人物桌面宠物",
   "private": true,
   "main": "src/main.js",
   "scripts": {
@@ -13,17 +14,34 @@
     "electron-builder": "26.15.7"
   },
   "dependencies": {
-    "koffi": "2.16.3",
-    "ws": "8.21.0"
+    "koffi": "2.16.3"
   },
   "build": {
-    "appId": "local.desktop.pet.suite",
-    "productName": "Desktop Pet Suite",
+    "appId": "local.person.desktop.pet",
+    "productName": "人物桌宠",
     "win": {
-      "artifactName": "Desktop-Pet-Suite-Setup-${version}-${arch}.${ext}",
+      "artifactName": "Person-Desktop-Pet-Setup-${version}-${arch}.${ext}",
       "target": [{ "target": "nsis", "arch": ["x64"] }]
     },
-    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true },
-    "files": ["src/**/*", "assets/**/*", "!assets/source/**/*"]
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "人物桌宠"
+    },
+    "files": [
+      "src/**/*",
+      "assets/animations/manifest.json",
+      "assets/animations/sheets/idle.png",
+      "assets/animations/sheets/crawl.png",
+      "assets/animations/sheets/kneel.png",
+      "assets/animations/sheets/sit.png",
+      "assets/animations/sheets/hang.png",
+      "assets/animations/sheets/wall-climb.png",
+      "assets/animations/sheets/drag.png",
+      "assets/animations/sheets/fall.png",
+      "assets/animations/sheets/land.png"
+    ]
   }
 }

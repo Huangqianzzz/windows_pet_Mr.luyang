@@ -5,6 +5,7 @@ const {
   resolveAttachment
 } = require("../domain/attachment");
 const { stepFall } = require("../domain/fall");
+const { clampRect, intersects } = require("../domain/geometry");
 const { initialState, reducePetState } = require("../domain/pet-state");
 
 const INPUT_ACTIONS = Object.freeze(["drag-start", "drag-move", "drag-end"]);
@@ -43,6 +44,30 @@ function validHitBox(hitBox) {
     && hitBox.width > 0 && hitBox.height > 0;
 }
 
+function overlapArea(first, second) {
+  const width = Math.max(0, Math.min(first.x + first.width, second.x + second.width) - Math.max(first.x, second.x));
+  const height = Math.max(0, Math.min(first.y + first.height, second.y + second.height) - Math.max(first.y, second.y));
+  return width * height;
+}
+
+function canEscapeCoveredObstacle(body, obstacle, candidate, workArea) {
+  const contains = obstacle.x <= body.x
+    && obstacle.y <= body.y
+    && obstacle.x + obstacle.width >= body.x + body.width
+    && obstacle.y + obstacle.height >= body.y + body.height;
+  if (!contains) return false;
+
+  const movedX = candidate.x - body.x;
+  const movedY = candidate.y - body.y;
+  const workRight = workArea.x + workArea.width;
+  const workBottom = workArea.y + workArea.height;
+  if (movedX < 0 && obstacle.x - body.width >= workArea.x) return true;
+  if (movedX > 0 && obstacle.x + obstacle.width + body.width <= workRight) return true;
+  if (movedY < 0 && obstacle.y - body.height >= workArea.y) return true;
+  if (movedY > 0 && obstacle.y + obstacle.height + body.height <= workBottom) return true;
+  return false;
+}
+
 class PetController {
   constructor({
     obstacleIndex,
@@ -51,6 +76,7 @@ class PetController {
     renderWindow,
     hitWindow,
     choosePose = choices => choices[0],
+    poseAnchors = {},
     gravity,
     releaseThreshold = 24
   }) {
@@ -77,12 +103,19 @@ class PetController {
     this.renderWindow = renderWindow;
     this.hitWindow = hitWindow;
     this.choosePose = choosePose;
+    this.poseAnchors = Object.freeze(Object.fromEntries(Object.entries(poseAnchors || {}).map(([pose, anchor]) => {
+      if (!anchor || ![anchor.x, anchor.y].every(Number.isFinite)) {
+        throw new TypeError(`pose anchor ${pose} must be finite`);
+      }
+      return [pose, Object.freeze({ x: anchor.x, y: anchor.y })];
+    })));
     this.gravity = gravity;
     this.releaseThreshold = releaseThreshold;
     this.state = initialState();
     this.attachment = null;
     this.dragOffset = null;
     this.frameHitBox = null;
+    this.frameSupportAnchor = null;
     this.restResumeState = null;
     this.speechResumeState = null;
   }
@@ -155,12 +188,56 @@ class PetController {
       height: this.baseSize.height * scale
     };
     this.currentScale = scale;
-    this.#renderBody();
+    if (this.attachment) this.syncObstacles();
+    else this.#renderBody();
     if (this.frameHitBox && this.state.mode !== "falling") {
       this.#hideHitRegion();
       this.#showCurrentHitRegion();
     }
     return true;
+  }
+
+  startCrawl(direction = "right") {
+    if (!["left", "right"].includes(direction)) return false;
+    const next = reducePetState(this.state, { type: "CRAWL" });
+    if (next.mode !== "crawling" || this.state.mode === "crawling") return false;
+    this.state = next;
+    this.#playAnimation("crawl", undefined, false, direction);
+    return true;
+  }
+
+  setCrawlDirection(direction) {
+    if (this.state.mode !== "crawling" || !["left", "right"].includes(direction)) return false;
+    return this.#playAnimation("crawl", undefined, false, direction);
+  }
+
+  stopCrawl() {
+    if (this.state.mode !== "crawling") return false;
+    this.state = reducePetState(this.state, { type: "CRAWL_COMPLETE" });
+    this.#playAnimation("idle");
+    return true;
+  }
+
+  moveCrawl(dx, dy, workArea) {
+    if (this.state.mode !== "crawling") return { moved: false, blocked: false };
+    if (![dx, dy].every(Number.isFinite)
+      || !workArea || ![workArea.x, workArea.y, workArea.width, workArea.height].every(Number.isFinite)
+      || workArea.width <= 0 || workArea.height <= 0) {
+      throw new TypeError("crawl movement and work area must be finite");
+    }
+    const desired = { ...this.body, x: this.body.x + dx, y: this.body.y + dy };
+    const candidate = clampRect(desired, workArea);
+    const blockedByBounds = candidate.x !== desired.x || candidate.y !== desired.y;
+    const blockedByObstacle = this.obstacleIndex.snapshot().some(obstacle => {
+      if (!obstacle?.rect || !intersects(candidate, obstacle.rect)) return false;
+      if (!intersects(this.body, obstacle.rect)) return true;
+      if (canEscapeCoveredObstacle(this.body, obstacle.rect, candidate, workArea)) return false;
+      return overlapArea(candidate, obstacle.rect) >= overlapArea(this.body, obstacle.rect);
+    });
+    if (blockedByObstacle) return { moved: false, blocked: true };
+    const moved = candidate.x !== this.body.x || candidate.y !== this.body.y;
+    if (moved) this.#moveBody(candidate.x, candidate.y);
+    return { moved, blocked: blockedByBounds };
   }
 
   supportLost() {
@@ -197,7 +274,8 @@ class PetController {
       return false;
     }
     this.attachment = resolved.anchor;
-    this.#moveBody(resolved.point.x, resolved.point.y);
+    const point = this.#attachedBodyPoint(resolved.point);
+    this.#moveBody(point.x, point.y);
     return true;
   }
 
@@ -235,11 +313,22 @@ class PetController {
     return true;
   }
 
+  setFrameSupportAnchor(action, anchor) {
+    if (this.state.mode !== "attached" || action !== this.attachment?.pose
+      || !anchor || ![anchor.x, anchor.y].every(Number.isFinite)
+      || anchor.x < 0 || anchor.y < 0) {
+      return false;
+    }
+    this.frameSupportAnchor = { x: anchor.x, y: anchor.y };
+    return this.syncObstacles();
+  }
+
   #startDrag(point) {
     const nextState = reducePetState(this.state, { type: "DRAG_START" });
     if (nextState.mode !== "dragging") return { accepted: false };
     this.state = nextState;
     this.attachment = null;
+    this.frameSupportAnchor = null;
     this.dragOffset = { x: this.body.x - point.x, y: this.body.y - point.y };
     this.#playAnimation("drag");
     return { accepted: true };
@@ -268,14 +357,30 @@ class PetController {
     }
 
     this.attachment = createAttachment(release.target, release.edge, release.t, pose);
+    this.frameSupportAnchor = null;
     this.state = reducePetState(this.state, { type: "DRAG_END_ATTACH" });
     this.syncObstacles();
-    this.#playAnimation(pose);
+    this.#playAnimation(pose, undefined, false, this.#attachmentFacing());
     return { accepted: true, zone: release.zone, pose };
   }
 
-  #playAnimation(action, onComplete, force = false) {
-    return Boolean(this.animationBridge.play(action, { force, onComplete }));
+  #playAnimation(action, onComplete, force = false, facing) {
+    return Boolean(this.animationBridge.play(action, { force, onComplete, facing }));
+  }
+
+  #attachmentFacing() {
+    return this.attachment?.edge === "right" ? "left" : "right";
+  }
+
+  #attachedBodyPoint(edgePoint) {
+    const anchor = this.frameSupportAnchor || this.poseAnchors[this.attachment?.pose];
+    if (!anchor) return edgePoint;
+    const scaledX = anchor.x * this.currentScale;
+    const anchorX = this.#attachmentFacing() === "left" ? this.body.width - scaledX : scaledX;
+    return {
+      x: edgePoint.x - anchorX,
+      y: edgePoint.y - anchor.y * this.currentScale
+    };
   }
 
   #moveBody(x, y) {
