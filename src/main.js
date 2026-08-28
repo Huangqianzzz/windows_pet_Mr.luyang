@@ -15,6 +15,7 @@ const {
   createAnimationBridge
 } = require("./runtime/animation-protocol");
 const { createMenuTemplate, isMenuAction } = require("./runtime/menu");
+const { liveWindowAdapter } = require("./runtime/live-window-adapter");
 const { ObstacleIndex } = require("./runtime/obstacle-index");
 const {
   isTrustedIpcSender,
@@ -155,26 +156,6 @@ function createBubbleWindow() {
     bubbleWindow = undefined;
   });
   bubbleWindow.loadFile(path.join(__dirname, "render", "bubble.html"));
-}
-
-function liveWindowAdapter(getWindow, onBoundsChanged) {
-  return {
-    setBounds(bounds) {
-      const window = getWindow();
-      if (window && !window.isDestroyed()) {
-        window.setBounds(bounds, false);
-        onBoundsChanged?.();
-      }
-    },
-    hide() {
-      const window = getWindow();
-      if (window && !window.isDestroyed()) window.hide();
-    },
-    showInactive() {
-      const window = getWindow();
-      if (window && !window.isDestroyed()) window.showInactive();
-    }
-  };
 }
 
 function validRectangle(value) {

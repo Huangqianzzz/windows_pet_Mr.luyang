@@ -306,10 +306,8 @@ test("applies a validated 100-200 percent size from immutable base dimensions", 
   harness.controller.setFrameHitBox({ x: 2, y: 3, width: 8, height: 9 });
 
   assert.equal(harness.controller.setScale(1.5), true);
-  assert.deepEqual(harness.hitEvents.slice(-2), [
-    { type: "bounds", bounds: { x: 3, y: 5, width: 12, height: 14 } },
-    { type: "show" }
-  ]);
+  assert.deepEqual(harness.hitEvents.at(-1),
+    { type: "bounds", bounds: { x: 3, y: 5, width: 12, height: 14 } });
   assert.equal(harness.controller.setScale(2), true);
   assert.deepEqual(harness.controller.snapshot().body, {
     x: 0,
@@ -322,10 +320,8 @@ test("applies a validated 100-200 percent size from immutable base dimensions", 
   assert.equal(harness.controller.setScale(2.1), false);
   assert.deepEqual(harness.renderBounds.at(-1), { x: 0, y: 0, width: 40, height: 60 });
 
-  assert.deepEqual(harness.hitEvents.slice(-2), [
-    { type: "bounds", bounds: { x: 4, y: 6, width: 16, height: 18 } },
-    { type: "show" }
-  ]);
+  assert.deepEqual(harness.hitEvents.at(-1),
+    { type: "bounds", bounds: { x: 4, y: 6, width: 16, height: 18 } });
 });
 
 test("open-area release uses only the injected open pose and clears attachment", () => {
@@ -349,32 +345,54 @@ test("open-area land is a forced safety lifecycle animation", () => {
   assert.equal(harness.played.at(-1).options.force, true);
 });
 
-test("hit input tracks only the current valid frame box and clears on every switch", () => {
+test("keeps a valid hit region visible across 300 frame and position updates", () => {
   const harness = createHarness();
   harness.controller.handleInput("drag-start", { x: 0, y: 0 });
   harness.controller.handleInput("drag-move", { x: 100, y: 200 });
 
   assert.equal(harness.controller.setFrameHitBox({ x: 5, y: 6, width: 20, height: 30 }), true);
-  assert.deepEqual(harness.hitEvents.slice(-3), [
-    { type: "hide" },
+  assert.deepEqual(harness.hitEvents.slice(-2), [
     { type: "bounds", bounds: { x: 105, y: 206, width: 20, height: 30 } },
     { type: "show" }
   ]);
+  const showCount = harness.hitEvents.filter(event => event.type === "show").length;
+  const hideCount = harness.hitEvents.filter(event => event.type === "hide").length;
 
-  assert.equal(harness.controller.setFrameHitBox({ x: 1, y: 2, width: 8, height: 9 }), true);
-  assert.deepEqual(harness.hitEvents.slice(-3), [
-    { type: "hide" },
-    { type: "bounds", bounds: { x: 101, y: 202, width: 8, height: 9 } },
-    { type: "show" }
-  ]);
+  for (let frame = 0; frame < 300; frame += 1) {
+    harness.controller.handleInput("drag-move", { x: 101 + frame, y: 201 + frame });
+    assert.equal(harness.controller.setFrameHitBox({
+      x: 1 + (frame % 3), y: 2 + (frame % 2), width: 8, height: 9
+    }), true);
+  }
 
-  const boundsCount = harness.hitEvents.filter(event => event.type === "bounds").length;
+  assert.equal(harness.hitEvents.filter(event => event.type === "show").length, showCount);
+  assert.equal(harness.hitEvents.filter(event => event.type === "hide").length, hideCount);
+
   assert.equal(harness.controller.setFrameHitBox({ x: 0, y: 0, width: 0, height: 10 }), false);
-  assert.equal(harness.hitEvents.at(-1).type, "hide");
-  assert.equal(harness.hitEvents.filter(event => event.type === "bounds").length, boundsCount);
+  assert.equal(harness.hitEvents.filter(event => event.type === "hide").length, hideCount + 1);
+
+  assert.equal(harness.controller.setFrameHitBox({ x: 0, y: 0, width: 10, height: 10 }), true);
+  assert.equal(harness.controller.supportLost(), true);
+  assert.equal(harness.hitEvents.filter(event => event.type === "hide").length, hideCount + 2);
 });
 
-test("falling suppresses even a newly supplied valid hit box", () => {
+test("disables hit input in background and restores the current frame region", () => {
+  const harness = createHarness();
+  harness.controller.setFrameHitBox({ x: 2, y: 3, width: 10, height: 12 });
+  const hideCount = harness.hitEvents.filter(event => event.type === "hide").length;
+  const showCount = harness.hitEvents.filter(event => event.type === "show").length;
+
+  assert.equal(harness.controller.setInputEnabled(false), true);
+  assert.equal(harness.hitEvents.filter(event => event.type === "hide").length, hideCount + 1);
+  assert.deepEqual(harness.controller.handleInput("drag-start", { x: 0, y: 0 }), { accepted: false });
+
+  assert.equal(harness.controller.setInputEnabled(true), true);
+  assert.equal(harness.hitEvents.filter(event => event.type === "show").length, showCount + 1);
+  assert.deepEqual(harness.hitEvents.at(-1),
+    { type: "show" });
+});
+
+test("falling suppresses a newly supplied hit box without a redundant hide", () => {
   const harness = createHarness();
   attachToTop(harness, obstacle("window:1", { x: 100, y: 100, width: 400, height: 300 }));
   harness.obstacleIndex.replace("windows", []);
@@ -382,7 +400,7 @@ test("falling suppresses even a newly supplied valid hit box", () => {
   const boundsCount = harness.hitEvents.filter(event => event.type === "bounds").length;
 
   assert.equal(harness.controller.setFrameHitBox({ x: 0, y: 0, width: 10, height: 10 }), false);
-  assert.equal(harness.hitEvents.at(-1).type, "hide");
+  assert.equal(harness.hitEvents.at(-1)?.type, undefined);
   assert.equal(harness.hitEvents.filter(event => event.type === "bounds").length, boundsCount);
 });
 

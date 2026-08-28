@@ -103,6 +103,46 @@ test("main configures a separate focusable hit window and a mouse-transparent re
   assert.doesNotMatch(main, /AnimationPlayer/);
 });
 
+test("live hit-window adapter preserves static placement and skips redundant window calls", () => {
+  const { liveWindowAdapter } = require("../src/runtime/live-window-adapter");
+  const calls = [];
+  let bounds = { x: -32000, y: -32000, width: 1, height: 1 };
+  let visible = false;
+  const window = {
+    isDestroyed: () => false,
+    getBounds: () => bounds,
+    isVisible: () => visible,
+    setBounds(next, animate) {
+      calls.push({ type: "bounds", bounds: next, animate });
+      bounds = next;
+    },
+    hide() {
+      calls.push({ type: "hide" });
+      visible = false;
+    },
+    showInactive() {
+      calls.push({ type: "show" });
+      visible = true;
+    }
+  };
+  const adapter = liveWindowAdapter(() => window);
+
+  adapter.setBounds({ x: -32000, y: -32000, width: 1, height: 1 });
+  adapter.hide();
+  adapter.showInactive();
+  adapter.showInactive();
+  adapter.setBounds({ x: 20, y: 30, width: 40, height: 50 });
+  adapter.setBounds({ x: 20, y: 30, width: 40, height: 50 });
+  adapter.hide();
+  adapter.hide();
+
+  assert.deepEqual(calls, [
+    { type: "show" },
+    { type: "bounds", bounds: { x: 20, y: 30, width: 40, height: 50 }, animate: false },
+    { type: "hide" }
+  ]);
+});
+
 test("preload keeps three public APIs and validates internal animation and frame events", async () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "src", "preload.js"), "utf8");
   const ipcHandlers = new Map();

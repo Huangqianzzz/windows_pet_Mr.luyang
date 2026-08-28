@@ -115,6 +115,8 @@ class PetController {
     this.attachment = null;
     this.dragOffset = null;
     this.frameHitBox = null;
+    this.hitRegionVisible = false;
+    this.inputEnabled = true;
     this.frameSupportAnchor = null;
     this.restResumeState = null;
     this.speechResumeState = null;
@@ -129,11 +131,20 @@ class PetController {
   }
 
   handleInput(action, payload) {
+    if (!this.inputEnabled) return { accepted: false };
     const input = validatePetAction(action, payload);
     if (!input) return { accepted: false };
     if (action === "drag-start") return this.#startDrag(input.point);
     if (action === "drag-move") return this.#moveDrag(input.point);
     return this.#endDrag(input.point);
+  }
+
+  setInputEnabled(enabled) {
+    if (typeof enabled !== "boolean") return false;
+    this.inputEnabled = enabled;
+    if (enabled) this.#showCurrentHitRegion();
+    else this.#hideHitRegion();
+    return true;
   }
 
   rest() {
@@ -191,7 +202,6 @@ class PetController {
     if (this.attachment) this.syncObstacles();
     else this.#renderBody();
     if (this.frameHitBox && this.state.mode !== "falling") {
-      this.#hideHitRegion();
       this.#showCurrentHitRegion();
     }
     return true;
@@ -300,9 +310,11 @@ class PetController {
   }
 
   setFrameHitBox(hitBox) {
-    this.frameHitBox = null;
-    this.#hideHitRegion();
-    if (this.state.mode === "falling" || !validHitBox(hitBox)) return false;
+    if (this.state.mode === "falling" || !validHitBox(hitBox)) {
+      this.frameHitBox = null;
+      this.#hideHitRegion();
+      return false;
+    }
     this.frameHitBox = {
       x: hitBox.x,
       y: hitBox.y,
@@ -386,10 +398,7 @@ class PetController {
   #moveBody(x, y) {
     this.body = { ...this.body, x, y };
     this.#renderBody();
-    if (this.frameHitBox) {
-      this.#hideHitRegion();
-      this.#showCurrentHitRegion();
-    }
+    if (this.frameHitBox) this.#showCurrentHitRegion();
   }
 
   #renderBody() {
@@ -402,18 +411,25 @@ class PetController {
   }
 
   #hideHitRegion() {
+    if (!this.hitRegionVisible) return false;
     this.hitWindow?.hide?.();
+    this.hitRegionVisible = false;
+    return true;
   }
 
   #showCurrentHitRegion() {
-    if (!this.frameHitBox || this.state.mode === "falling") return;
+    if (!this.frameHitBox || this.state.mode === "falling" || !this.inputEnabled) return false;
     this.hitWindow?.setBounds?.({
       x: Math.round(this.body.x + this.frameHitBox.x * this.currentScale),
       y: Math.round(this.body.y + this.frameHitBox.y * this.currentScale),
       width: Math.max(1, Math.ceil(this.frameHitBox.width * this.currentScale)),
       height: Math.max(1, Math.ceil(this.frameHitBox.height * this.currentScale))
     });
-    this.hitWindow?.showInactive?.();
+    if (!this.hitRegionVisible) {
+      this.hitWindow?.showInactive?.();
+      this.hitRegionVisible = true;
+    }
+    return true;
   }
 }
 
