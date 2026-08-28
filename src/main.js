@@ -25,6 +25,11 @@ const {
 const { SettingsStore } = require("./runtime/settings");
 const { runRuntimeTick } = require("./runtime/runtime-tick");
 const {
+  createBackgroundModeCoordinator,
+  createBackgroundModeTransitions,
+  createForegroundGate
+} = require("./runtime/foreground-gate");
+const {
   createRendererCommandBridge,
   createSpeechFlow,
   speakChinese
@@ -32,12 +37,18 @@ const {
 const { readTaskbarRects } = require("./windows/taskbar");
 const { getDesktopIconDiagnostic, readDesktopIconRects } = require("./windows/desktop-icons");
 const { createWindowSensor } = require("./windows/window-sensor");
+const {
+  createForegroundWindowReader,
+  isForegroundBlocking
+} = require("./windows/foreground-window");
+const { createWindowZOrder } = require("./windows/window-z-order");
 
 app.disableHardwareAcceleration();
 
 const INTERACTION_COMMAND_CHANNEL = "desktop-pet:interaction-command";
 const INTERACTION_RESULT_CHANNEL = "desktop-pet:interaction-result";
 const BUBBLE_UPDATE_CHANNEL = "desktop-pet:bubble-update";
+const BACKGROUND_MODE_CHANNEL = "desktop-pet:background-mode";
 const BUBBLE_SIZE = Object.freeze({ width: 220, height: 90 });
 
 let petWindow;
@@ -50,6 +61,11 @@ let speechFlow;
 let settingsStore;
 let windowSensor;
 let fallTimer;
+let foregroundTimer;
+let backgroundModeCoordinator;
+let backgroundModeTransitions;
+let runtimePaused = false;
+let previousTick;
 let frameFaceBox;
 let bubbleReadyPromise = Promise.resolve(false);
 let activeBubbleText;
@@ -231,6 +247,22 @@ function hideSpeechBubble() {
   if (bubbleWindow && !bubbleWindow.isDestroyed()) bubbleWindow.hide();
 }
 
+function activeWindows() {
+  return [petWindow, hitWindow, bubbleWindow].filter(window => window && !window.isDestroyed());
+}
+
+function setAllAlwaysOnTop(enabled) {
+  for (const window of activeWindows()) {
+    try { window.setAlwaysOnTop(enabled); } catch {}
+  }
+}
+
+function sendBackgroundMode(paused) {
+  if (!petWindow || petWindow.isDestroyed()) return false;
+  petWindow.webContents.send(BACKGROUND_MODE_CHANNEL, { paused });
+  return true;
+}
+
 function syncControllerObstacles() {
   const previousMode = controller?.snapshot().state.mode;
   const result = controller?.syncObstacles();
@@ -309,11 +341,13 @@ function createRuntime() {
   bubbleDisplayMonitor.start();
   windowSensor.start();
 
-  let previousTick = Date.now();
+  runtimePaused = false;
+  previousTick = Date.now();
   fallTimer = setInterval(() => {
     const now = Date.now();
     const dtMs = Math.min(100, Math.max(0, now - previousTick));
     previousTick = now;
+    if (runtimePaused) return;
     if (controller && autonomousRoam) {
       runRuntimeTick({
         controller,
@@ -324,11 +358,52 @@ function createRuntime() {
       });
     }
   }, 16);
+
+  const foregroundReader = createForegroundWindowReader({ screen });
+  const foregroundGate = createForegroundGate({ settleMs: 250 });
+  const windowZOrder = createWindowZOrder();
+  backgroundModeTransitions = createBackgroundModeTransitions({
+    setRuntimePaused(paused) { runtimePaused = paused; },
+    setInputEnabled(enabled) { controller?.setInputEnabled(enabled); },
+    hideBubble: hideSpeechBubble,
+    dismissSpeech() { void speechFlow?.dismiss(); },
+    sendRendererPaused: sendBackgroundMode,
+    setAlwaysOnTop: setAllAlwaysOnTop,
+    lowerWindows() {
+      for (const window of activeWindows()) {
+        try { windowZOrder.sendToBottom(window.getNativeWindowHandle()); } catch {}
+      }
+    },
+    refreshObstacles: syncControllerObstacles,
+    resetTickClock() { previousTick = Date.now(); }
+  });
+  backgroundModeCoordinator = createBackgroundModeCoordinator({
+    readForeground: () => foregroundReader.snapshot(),
+    getPetBody: () => controller.snapshot().body,
+    screen,
+    classify(snapshot, targetDisplay) {
+      return isForegroundBlocking(snapshot, {
+        screen,
+        targetDisplay,
+        ownProcessId: process.pid
+      });
+    },
+    gate: foregroundGate,
+    enter: () => backgroundModeTransitions.enter(),
+    leave: () => backgroundModeTransitions.leave()
+  });
+  foregroundTimer = setInterval(() => backgroundModeCoordinator?.poll(), 100);
 }
 
 function stopRuntime() {
+  if (foregroundTimer) clearInterval(foregroundTimer);
+  foregroundTimer = undefined;
+  backgroundModeCoordinator = undefined;
+  backgroundModeTransitions = undefined;
   if (fallTimer) clearInterval(fallTimer);
   fallTimer = undefined;
+  runtimePaused = false;
+  previousTick = undefined;
   if (windowSensor && windowSensor.stop() === false) windowSensor.stop();
   windowSensor = undefined;
   bubbleDisplayMonitor?.stop();

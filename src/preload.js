@@ -27,6 +27,7 @@ const RECOVERY_ACTIONS = new Set([
   "hang"
 ]);
 const SPEECH_TEXT = new Set(["爸爸", "我错了"]);
+let latestBackgroundMode;
 
 function exactKeys(value, keys) {
   if (!value || typeof value !== "object") return false;
@@ -96,6 +97,11 @@ function bubbleUpdate(value) {
   return { text: value.text };
 }
 
+function backgroundMode(value) {
+  if (!exactKeys(value, ["paused"]) || typeof value.paused !== "boolean") return null;
+  return { paused: value.paused };
+}
+
 function invokeInternal(channel, payload) {
   ipcRenderer.invoke(channel, payload).catch(() => {});
 }
@@ -117,6 +123,22 @@ ipcRenderer.on("desktop-pet:interaction-command", (_event, rawCommand) => {
 ipcRenderer.on("desktop-pet:bubble-update", (_event, rawUpdate) => {
   const update = bubbleUpdate(rawUpdate);
   if (update) window.dispatchEvent(new CustomEvent("desktop-pet:bubble-update", { detail: update }));
+});
+
+ipcRenderer.on("desktop-pet:background-mode", (_event, rawMode) => {
+  const mode = backgroundMode(rawMode);
+  if (mode) {
+    latestBackgroundMode = mode;
+    window.dispatchEvent(new CustomEvent("desktop-pet:background-mode", { detail: mode }));
+  }
+});
+
+window.addEventListener("DOMContentLoaded", () => {
+  if (latestBackgroundMode) {
+    window.dispatchEvent(new CustomEvent("desktop-pet:background-mode", {
+      detail: latestBackgroundMode
+    }));
+  }
 });
 
 window.addEventListener("desktop-pet:frame-hit-box", event => {

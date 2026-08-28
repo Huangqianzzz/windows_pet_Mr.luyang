@@ -2,6 +2,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const fs = require("node:fs");
+const vm = require("node:vm");
 
 class LocalCustomEvent {
   constructor(type, { detail }) {
@@ -181,4 +182,115 @@ test("renders from the player's frozen manifest after bootstrap data is tampered
 
   assert.equal(root.children[0].style.backgroundImage, "url(\"file:///C:/pet/assets/animations/idle.png\")");
   assert.equal(root.children[0].style.backgroundPosition, "-10px 0px");
+});
+
+test("preload forwards only the exact desktop-pet background mode payload", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "src", "preload.js"), "utf8");
+  const ipcHandlers = new Map();
+  const localHandlers = new Map();
+  const dispatched = [];
+  class CustomEvent {
+    constructor(type, { detail }) { this.type = type; this.detail = detail; }
+  }
+  vm.runInNewContext(source, {
+    CustomEvent,
+    window: {
+      addEventListener(type, listener) { localHandlers.set(type, listener); },
+      dispatchEvent(event) { dispatched.push(event); }
+    },
+    require(id) {
+      assert.equal(id, "electron");
+      return {
+        contextBridge: { exposeInMainWorld() {} },
+        ipcRenderer: {
+          invoke: () => Promise.resolve(),
+          on(channel, listener) { ipcHandlers.set(channel, listener); }
+        }
+      };
+    }
+  });
+
+  const receive = ipcHandlers.get("desktop-pet:background-mode");
+  assert.equal(typeof receive, "function");
+  receive({}, { paused: true });
+  receive({}, { paused: false });
+  receive({}, {});
+  receive({}, { paused: "true" });
+  receive({}, { paused: true, extra: true });
+  localHandlers.get("DOMContentLoaded")();
+
+  assert.deepEqual(dispatched.map(event => ({
+    type: event.type,
+    detail: JSON.parse(JSON.stringify(event.detail))
+  })), [
+    { type: "desktop-pet:background-mode", detail: { paused: true } },
+    { type: "desktop-pet:background-mode", detail: { paused: false } },
+    { type: "desktop-pet:background-mode", detail: { paused: false } }
+  ]);
+});
+
+test("renderer combines rest and background pause reasons across bootstrap and play", async () => {
+  const { mountPet } = require("../src/render/pet-renderer");
+  let resolveBootstrap;
+  const bootstrap = new Promise(resolve => { resolveBootstrap = resolve; });
+  const eventTarget = localEventTarget();
+  const frame = {
+    source: { x: 0, y: 0, width: 10, height: 10 },
+    faceBox: { x: 2, y: 1, width: 5, height: 4 },
+    hitBox: { x: 1, y: 1, width: 8, height: 8 }
+  };
+  const action = {
+    sheet: { file: "idle.png", width: 10, height: 10 },
+    loop: true,
+    frames: [frame]
+  };
+  const manifest = { actions: { idle: action, crawl: action } };
+  class Player {
+    constructor(received) { this.manifest = received; this.calls = []; }
+    play(name, options = {}) {
+      this.calls.push(["play", name]);
+      options.onFrame?.(frame, 0, name);
+      return this;
+    }
+    freeze() { this.calls.push(["freeze"]); return this; }
+    resume() { this.calls.push(["resume"]); return this; }
+  }
+  const mounted = mountPet({
+    document: {
+      getElementById: () => ({ append() {} }),
+      createElement: () => ({ style: {}, setAttribute() {} })
+    },
+    desktopPet: { getBootstrap: () => bootstrap },
+    AnimationPlayer: Player,
+    locationHref: "file:///C:/pet/src/render/pet.html",
+    eventTarget
+  });
+
+  eventTarget.dispatchEvent(new LocalCustomEvent("desktop-pet:background-mode", {
+    detail: { paused: true }
+  }));
+  resolveBootstrap({ manifest });
+  const player = await mounted.ready;
+  assert.deepEqual(player.calls, [["play", "idle"], ["freeze"]]);
+
+  eventTarget.dispatchEvent(new LocalCustomEvent("desktop-pet:interaction-command", {
+    detail: { id: 1, type: "freeze", expiresAt: Number.MAX_SAFE_INTEGER }
+  }));
+  eventTarget.dispatchEvent(new LocalCustomEvent("desktop-pet:background-mode", {
+    detail: { paused: false }
+  }));
+  assert.deepEqual(player.calls, [["play", "idle"], ["freeze"]]);
+
+  eventTarget.dispatchEvent(new LocalCustomEvent("desktop-pet:interaction-command", {
+    detail: { id: 2, type: "resume", expiresAt: Number.MAX_SAFE_INTEGER }
+  }));
+  assert.deepEqual(player.calls.at(-1), ["resume"]);
+
+  eventTarget.dispatchEvent(new LocalCustomEvent("desktop-pet:background-mode", {
+    detail: { paused: true }
+  }));
+  eventTarget.dispatchEvent(new LocalCustomEvent("desktop-pet:animation-command", {
+    detail: { id: 3, action: "crawl", force: false }
+  }));
+  assert.deepEqual(player.calls.slice(-3), [["freeze"], ["play", "crawl"], ["freeze"]]);
 });

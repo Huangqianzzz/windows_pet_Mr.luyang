@@ -2,6 +2,9 @@
   const animationProtocol = typeof module === "object" && module.exports
     ? require("../runtime/animation-protocol")
     : global.DesktopPetAnimationProtocol;
+  const createPauseCoordinator = typeof module === "object" && module.exports
+    ? require("../runtime/pause-coordinator").createPauseCoordinator
+    : createLocalPauseCoordinator;
 
   function isLocalAnimationAsset(file) {
     return typeof file === "string"
@@ -82,6 +85,21 @@
       : { id: value.id, type: value.type, expiresAt: value.expiresAt };
   }
 
+  function createLocalPauseCoordinator({ freeze, resume }) {
+    const reasons = new Set();
+    return {
+      set(reason, paused) {
+        const wasPaused = reasons.size > 0;
+        if (paused) reasons.add(reason);
+        else reasons.delete(reason);
+        const isPaused = reasons.size > 0;
+        if (!wasPaused && isPaused) freeze();
+        else if (wasPaused && !isPaused) resume();
+      },
+      snapshot: () => ({ paused: reasons.size > 0, reasons: [...reasons] })
+    };
+  }
+
   function mountPet({ document, desktopPet, AnimationPlayer, locationHref, eventTarget = global, now = Date.now }) {
     const root = document.getElementById("pet-root");
     const sprite = document.createElement("div");
@@ -93,6 +111,13 @@
     let currentFacing = "right";
     const pendingCommands = [];
     const pendingInteractions = [];
+    const pauses = createPauseCoordinator({
+      freeze: () => player?.freeze(),
+      resume: () => player?.resume()
+    });
+    const reconcilePlayerPause = () => {
+      if (player && pauses.snapshot().paused) player.freeze();
+    };
     const reportFrame = (frame, _frameIndex, actionName) => {
       const hitBox = currentFacing === "left" ? mirrorBox(frame.hitBox, frame.source.width) : frame.hitBox;
       const faceBox = currentFacing === "left" ? mirrorBox(frame.faceBox, frame.source.width) : frame.faceBox;
@@ -123,6 +148,7 @@
         onFrame: reportFrame,
         onComplete: complete
       });
+      if (played) reconcilePlayerPause();
       if (played && actionName !== command.action) complete();
       return Boolean(played);
     };
@@ -138,7 +164,7 @@
         return false;
       }
       if (command.type === "freeze" || command.type === "resume") {
-        player[command.type]();
+        pauses.set("rest", command.type === "freeze");
         dispatchDetail(eventTarget, "desktop-pet:interaction-result", {
           id: command.id,
           accepted: true
@@ -161,6 +187,7 @@
           });
         }
       });
+      if (played) reconcilePlayerPause();
       if (!played) {
         dispatchDetail(eventTarget, "desktop-pet:interaction-result", {
           id: command.id,
@@ -178,6 +205,11 @@
       if (player) runInteraction(event.detail);
       else pendingInteractions.push(event.detail);
     });
+    eventTarget.addEventListener("desktop-pet:background-mode", event => {
+      if (typeof event.detail?.paused === "boolean") {
+        pauses.set("background", event.detail.paused);
+      }
+    });
 
     const ready = desktopPet.getBootstrap()
       .then(({ manifest }) => {
@@ -185,6 +217,7 @@
         player.play("idle", {
           onFrame: reportFrame
         });
+        reconcilePlayerPause();
         for (const command of pendingCommands.splice(0)) playCommand(command);
         for (const command of pendingInteractions.splice(0)) runInteraction(command);
         return player;
