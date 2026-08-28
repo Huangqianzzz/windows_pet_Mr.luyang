@@ -123,9 +123,13 @@ git commit -m "fix: keep desktop pet input window stable"
 
 **Files:**
 - Create: `src/windows/foreground-window.js`
+- Create: `src/windows/window-z-order.js`
 - Create: `src/runtime/foreground-gate.js`
+- Create: `src/runtime/pause-coordinator.js`
 - Create: `test/foreground-window.test.js`
+- Create: `test/window-z-order.test.js`
 - Create: `test/foreground-gate.test.js`
+- Create: `test/pause-coordinator.test.js`
 - Modify: `src/main.js`
 - Modify: `src/preload.js`
 - Modify: `src/render/pet-renderer.js`
@@ -135,6 +139,8 @@ git commit -m "fix: keep desktop pet input window stable"
 - Produces: `createForegroundWindowReader().snapshot(): ForegroundSnapshot | null`。
 - `ForegroundSnapshot = { hwnd, processId, rect, maximized, fullscreen }`。
 - Produces: `createForegroundGate({ settleMs }).tick(backgroundRequested, now): "enter" | "leave" | "none"`。
+- Produces: `createWindowZOrder().sendToBottom(hwnd): boolean`，内部使用 Win32 `SetWindowPos(HWND_BOTTOM)`；Electron 41 不提供 `BrowserWindow.moveBottom()`。
+- Produces: `createPauseCoordinator()`，分别记录 `rest` 与 `background` 暂停原因；只有原因集合从空变为非空时 freeze，从非空恢复为空时 resume。
 - Produces renderer event: `desktop-pet:background-mode` with `{ paused: boolean }`。
 
 - [ ] **Step 1: 写前台分类与稳定门失败测试**
@@ -166,20 +172,20 @@ Expected: FAIL，模块无法加载。
 
 - [ ] **Step 4: 接入后台/恢复流程**
 
-在 `main.js` 增加独立的 100ms 前台监视计时器，以及 `enterBackgroundMode()` 与 `leaveBackgroundMode()`。进入时暂停物理/自主 tick、通过 renderer freeze 能力暂停动画、调用 `controller.setInputEnabled(false)`、隐藏气泡、对三个窗口取消置顶并调用 `moveBottom()`；前台监视计时器不能随物理 tick 一起停止。恢复时先刷新窗口障碍，再恢复置顶、命中、动画和物理 tick 时间基准。
+在 `main.js` 增加独立的 100ms 前台监视计时器，以及 `enterBackgroundMode()` 与 `leaveBackgroundMode()`。进入时暂停物理/自主 tick、向暂停协调器加入 `background`、调用 `controller.setInputEnabled(false)`、隐藏气泡、对三个窗口取消置顶并通过 `SetWindowPos(HWND_BOTTOM)` 下沉；前台监视计时器不能随物理 tick 一起停止。恢复时先刷新窗口障碍，再恢复置顶、命中，移除 `background` 暂停原因并重置物理 tick 时间基准。原地休息使用独立的 `rest` 原因，退出后台不得错误恢复仍在休息的人物。
 
 `preload.js` 只接受精确 `{ paused: boolean }` 负载并转发本地事件；`pet-renderer.js` 对 `paused: true` 调用 `player.freeze()`，对 `false` 调用 `player.resume()`。
 
 - [ ] **Step 5: 运行后台模式测试**
 
-Run: `node --test test/foreground-window.test.js test/foreground-gate.test.js test/pet-renderer.test.js test/runtime-tick.test.js`
+Run: `node --test test/foreground-window.test.js test/window-z-order.test.js test/foreground-gate.test.js test/pause-coordinator.test.js test/pet-renderer.test.js test/runtime-tick.test.js`
 
 Expected: 全部 PASS。
 
 - [ ] **Step 6: 提交后台模式**
 
 ```powershell
-git add src/windows/foreground-window.js src/runtime/foreground-gate.js src/main.js src/preload.js src/render/pet-renderer.js test/foreground-window.test.js test/foreground-gate.test.js test/pet-renderer.test.js
+git add src/windows/foreground-window.js src/windows/window-z-order.js src/runtime/foreground-gate.js src/runtime/pause-coordinator.js src/main.js src/preload.js src/render/pet-renderer.js test/foreground-window.test.js test/window-z-order.test.js test/foreground-gate.test.js test/pause-coordinator.test.js test/pet-renderer.test.js
 git commit -m "feat: pause desktop pet behind fullscreen apps"
 ```
 
@@ -263,7 +269,7 @@ Expected: FAIL，模块无法加载。
 
 - [ ] **Step 5: 增加封闭区域最后保护**
 
-控制器在攀爬和绕行均超过限定停滞时间时，选择最近窗口外缘作为掉落起点并调用 `supportLost()`。测试断言位置沿边连续变化，禁止直接设置远端自由点。
+控制器在攀爬和绕行均超过限定停滞时间时，选择最近窗口边缘并进入 `behind-window` 逃生状态。渲染窗口临时下沉到目标窗口后方，逻辑位置沿连续路径移动到最近外侧边缘后恢复置顶并进入掉落。测试断言路径连续，禁止直接设置远端自由点。
 
 - [ ] **Step 6: 运行状态、导航和控制器测试**
 
@@ -306,7 +312,7 @@ Expected: FAIL，旧实现对每个事件立即刷新。
 
 - [ ] **Step 3: 实现尾沿合并和支撑快照确认**
 
-窗口位置、显示、隐藏事件使用单个 75ms 尾沿计时器；销毁和最小化事件立即刷新并传递 `{ immediate: true }`。主进程记录上一个完整窗口快照，对 `{ immediate: false }` 造成的单次支撑缺失延迟到下一完整快照确认。
+窗口位置、显示、隐藏事件使用单个 75ms 尾沿计时器；销毁和最小化事件立即刷新并传递 `{ immediate: true }`。主进程记录上一个完整窗口快照；对 `{ immediate: false }` 造成的单次支撑缺失，主动安排 75ms 后的第二次枚举确认，不能被动等待下一次 WinEvent。枚举失败不算完整快照；立即事件取消普通 debounce；`stop()` 清除所有待执行计时器。
 
 - [ ] **Step 4: 运行相关测试**
 
@@ -333,15 +339,17 @@ git commit -m "perf: coalesce desktop window obstacle updates"
 - Create: `src/runtime/render-buffer.js`
 - Create: `test/render-buffer.test.js`
 - Modify: `src/main.js`
+- Modify: `src/runtime/pet-controller.js`
 - Modify: `src/preload.js`
 - Modify: `src/render/pet-renderer.js`
 - Modify: `src/render/pet.css`
 - Modify: `test/pet-renderer.test.js`
+- Modify: `test/pet-controller.test.js`
 - Modify: `test/bubble-placement.test.js`
 
 **Interfaces:**
 - Produces: `createRenderBuffer({ margin = 96 }).place(body, { dragging = false }): RenderPlacement`。
-- `RenderPlacement = { hostBounds, localX, localY, recentered }`，全部全局尺寸使用 DIP；`localX/localY` 允许小数。
+- `RenderPlacement = { hostBounds, localX, localY, recentered }`，全部全局尺寸使用 DIP；`localX/localY` 允许小数。控制器必须保留未取整的 body 坐标并传给 render buffer。
 - Produces renderer event: `desktop-pet:visual-offset` with exact `{ x, y }`。
 
 - [ ] **Step 1: 写渲染缓冲纯逻辑失败测试**
@@ -372,7 +380,7 @@ Expected: FAIL，模块无法加载。
 
 - [ ] **Step 4: 接入渲染器子像素移动**
 
-`pet-renderer.js` 创建 `.pet-stage` 包裹 `.pet-sprite`，偏移事件只修改 stage：
+`pet-renderer.js` 创建 `.pet-stage` 包裹 `.pet-sprite`，偏移事件只修改 stage。由于现有 `zoomFactor === petScale`，DIP 局部偏移在主进程发送前除以 `petScale`，确保 CSS px 只换算一次：
 
 ```js
 stage.style.transform = `translate3d(${offset.x}px, ${offset.y}px, 0)`;
@@ -382,7 +390,7 @@ stage.style.transform = `translate3d(${offset.x}px, ${offset.y}px, 0)`;
 
 - [ ] **Step 5: 统一命中与气泡全局坐标**
 
-`main.js` 不再用 `petWindow.getBounds()` 作为人物矩形。命中窗口、脸部盒子、气泡和显示器选择全部使用 `controller.snapshot().body`，再叠加当前帧局部盒子和缩放。
+`PetController.#renderBody()` 不再先把全局 body 坐标取整后交给渲染协调器；render buffer 接收小数逻辑坐标，只有原生 `hostBounds` 落地时取整。`main.js` 不再用 `petWindow.getBounds()` 作为人物矩形。命中窗口、脸部盒子、气泡和显示器选择全部使用 `controller.snapshot().body`，再叠加当前帧局部盒子和缩放。
 
 - [ ] **Step 6: 运行平滑渲染测试**
 
