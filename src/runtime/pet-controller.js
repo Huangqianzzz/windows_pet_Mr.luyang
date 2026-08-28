@@ -143,7 +143,10 @@ class PetController {
     if (typeof enabled !== "boolean") return false;
     this.inputEnabled = enabled;
     if (enabled) this.#showCurrentHitRegion();
-    else this.#hideHitRegion();
+    else {
+      this.#cancelDrag();
+      this.#hideHitRegion();
+    }
     return true;
   }
 
@@ -344,6 +347,16 @@ class PetController {
     this.dragOffset = { x: this.body.x - point.x, y: this.body.y - point.y };
     this.#playAnimation("drag");
     return { accepted: true };
+  }
+
+  #cancelDrag() {
+    if (this.state.mode !== "dragging") return false;
+    this.state = initialState();
+    this.dragOffset = null;
+    this.attachment = null;
+    this.frameSupportAnchor = null;
+    this.#playAnimation("idle");
+    return true;
   }
 
   #moveDrag(point) {

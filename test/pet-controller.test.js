@@ -392,6 +392,27 @@ test("disables hit input in background and restores the current frame region", (
     { type: "show" });
 });
 
+test("disabling input during drag safely cancels it before a restored drag can begin", () => {
+  const harness = createHarness();
+  harness.obstacleIndex.replace("windows", [
+    obstacle("window:cancel-drag", { x: 100, y: 100, width: 400, height: 300 })
+  ]);
+  assert.deepEqual(harness.controller.handleInput("drag-start", { x: 0, y: 0 }), { accepted: true });
+  assert.deepEqual(harness.controller.handleInput("drag-move", { x: 200, y: 101 }), { accepted: true });
+  const bodyBeforeDisable = harness.controller.snapshot().body;
+
+  assert.equal(harness.controller.setInputEnabled(false), true);
+  assert.equal(harness.controller.snapshot().state.mode, "idle");
+  assert.equal(harness.controller.snapshot().attachment, null);
+  assert.deepEqual(harness.controller.snapshot().body, bodyBeforeDisable);
+  assert.equal(harness.played.at(-1).action, "idle");
+
+  assert.equal(harness.controller.setInputEnabled(true), true);
+  assert.deepEqual(harness.controller.handleInput("drag-end", { x: 200, y: 101 }), { accepted: false });
+  assert.equal(harness.controller.snapshot().attachment, null);
+  assert.deepEqual(harness.controller.handleInput("drag-start", { x: 200, y: 101 }), { accepted: true });
+});
+
 test("falling suppresses a newly supplied hit box without a redundant hide", () => {
   const harness = createHarness();
   attachToTop(harness, obstacle("window:1", { x: 100, y: 100, width: 400, height: 300 }));
