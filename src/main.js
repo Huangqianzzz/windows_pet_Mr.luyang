@@ -27,7 +27,8 @@ const { runRuntimeTick } = require("./runtime/runtime-tick");
 const {
   createBackgroundModeCoordinator,
   createBackgroundModeTransitions,
-  createForegroundGate
+  createForegroundGate,
+  createTransitionCommand
 } = require("./runtime/foreground-gate");
 const {
   createRendererCommandBridge,
@@ -390,7 +391,7 @@ function createRuntime() {
       }
       return succeeded;
     },
-    refreshObstacles: syncControllerObstacles,
+    refreshObstacles: createTransitionCommand(syncControllerObstacles),
     resetTickClock() { previousTick = Date.now(); return true; }
   });
   backgroundModeCoordinator = createBackgroundModeCoordinator({

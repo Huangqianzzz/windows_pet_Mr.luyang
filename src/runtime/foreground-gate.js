@@ -110,6 +110,14 @@ function executeTransition(steps) {
   }
 }
 
+function createTransitionCommand(operation) {
+  if (typeof operation !== "function") throw new TypeError("operation must be a function");
+  return (...args) => {
+    operation(...args);
+    return true;
+  };
+}
+
 function createBackgroundModeTransitions({
   setRuntimePaused,
   setInputEnabled,
@@ -122,6 +130,20 @@ function createBackgroundModeTransitions({
   resetTickClock
 }) {
   let background = false;
+  function restoreBackgroundLayering() {
+    let succeeded = true;
+    try {
+      if (setAlwaysOnTop(false) === false) succeeded = false;
+    } catch {
+      succeeded = false;
+    }
+    try {
+      if (lowerWindows() === false) succeeded = false;
+    } catch {
+      succeeded = false;
+    }
+    return succeeded;
+  }
   return Object.freeze({
     enter() {
       if (background) return false;
@@ -143,7 +165,7 @@ function createBackgroundModeTransitions({
       const completed = executeTransition([
         [refreshObstacles],
         [resetTickClock],
-        [() => setAlwaysOnTop(true), () => setAlwaysOnTop(false)],
+        [() => setAlwaysOnTop(true), restoreBackgroundLayering],
         [() => sendRendererPaused(false), () => sendRendererPaused(true)],
         [() => setRuntimePaused(false), () => setRuntimePaused(true)],
         [() => setInputEnabled(true), () => setInputEnabled(false)]
@@ -161,5 +183,6 @@ function createBackgroundModeTransitions({
 module.exports = {
   createBackgroundModeCoordinator,
   createBackgroundModeTransitions,
-  createForegroundGate
+  createForegroundGate,
+  createTransitionCommand
 };

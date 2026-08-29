@@ -85,4 +85,5 @@ test("main runtime owns one autonomous scheduler and ticks it with persisted set
   assert.match(main, /poseAnchorsFromManifest/);
   assert.match(main, /poseAnchors:\s*poseAnchorsFromManifest\(animationBootstrap\.manifest/);
   assert.match(main, /backgroundPaused:\s*runtimePaused/);
+  assert.match(main, /refreshObstacles:\s*createTransitionCommand\(syncControllerObstacles\)/);
 });

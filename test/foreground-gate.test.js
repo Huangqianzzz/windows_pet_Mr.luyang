@@ -267,3 +267,68 @@ test("failed leave rolls back to background and retries the same stable edge", (
   assert.deepEqual(state, { runtime: false, input: true, renderer: false, top: true });
   assert.deepEqual(transitions.snapshot(), { background: false });
 });
+
+test("refresh command treats a normal domain false as successful execution", () => {
+  const {
+    createBackgroundModeTransitions,
+    createTransitionCommand
+  } = require("../src/runtime/foreground-gate");
+  let syncCalls = 0;
+  const transitions = createBackgroundModeTransitions({
+    setRuntimePaused() {},
+    setInputEnabled() {},
+    hideBubble() {},
+    dismissSpeech() {},
+    sendRendererPaused() {},
+    setAlwaysOnTop() {},
+    lowerWindows() {},
+    refreshObstacles: createTransitionCommand(() => {
+      syncCalls += 1;
+      return false;
+    }),
+    resetTickClock() {}
+  });
+
+  assert.equal(transitions.enter(), true);
+  assert.equal(transitions.leave(), true);
+  assert.equal(syncCalls, 1);
+  assert.deepEqual(transitions.snapshot(), { background: false });
+});
+
+test("failed leave restores non-topmost and HWND_BOTTOM in that order", () => {
+  const { createBackgroundModeTransitions } = require("../src/runtime/foreground-gate");
+  const calls = [];
+  let failRendererLeave = false;
+  const transitions = createBackgroundModeTransitions({
+    setRuntimePaused: value => calls.push(`runtime:${value}`),
+    setInputEnabled: value => calls.push(`input:${value}`),
+    hideBubble: () => calls.push("hide"),
+    dismissSpeech: () => calls.push("dismiss"),
+    sendRendererPaused(value) {
+      calls.push(`renderer:${value}`);
+      if (!value && failRendererLeave) {
+        failRendererLeave = false;
+        throw new Error("renderer unavailable");
+      }
+    },
+    setAlwaysOnTop: value => calls.push(`top:${value}`),
+    lowerWindows: () => calls.push("lower"),
+    refreshObstacles: () => calls.push("refresh"),
+    resetTickClock: () => calls.push("clock")
+  });
+
+  assert.equal(transitions.enter(), true);
+  calls.length = 0;
+  failRendererLeave = true;
+  assert.equal(transitions.leave(), false);
+  assert.deepEqual(calls, [
+    "refresh",
+    "clock",
+    "top:true",
+    "renderer:false",
+    "renderer:true",
+    "top:false",
+    "lower"
+  ]);
+  assert.deepEqual(transitions.snapshot(), { background: true });
+});
