@@ -17,20 +17,44 @@ function createAutonomousRoam({
   const idleRange = validateRange("idleDurationMs", idleDurationMs);
   const crawlRange = validateRange("crawlDurationMs", crawlDurationMs);
 
-  const duration = range => range[0] + (range[1] - range[0]) * random();
+  function sample() {
+    const value = random();
+    if (!Number.isFinite(value) || value < 0 || value >= 1) {
+      throw new RangeError("random must return a value in [0, 1)");
+    }
+    return value;
+  }
+
+  const duration = range => range[0] + (range[1] - range[0]) * sample();
   let phase = "idle";
   let remaining = duration(idleRange);
   let direction = "right";
+  let verticalBias = 0;
+  let verticalTarget = 0;
+  let lastRerouteAt;
 
   function resetIdle() {
     phase = "idle";
     remaining = duration(idleRange);
+    verticalBias = 0;
+    verticalTarget = 0;
+    lastRerouteAt = undefined;
   }
 
   function startCrawl() {
     phase = "crawl";
     remaining = duration(crawlRange);
-    direction = random() < 0.5 ? "left" : "right";
+    direction = sample() < 0.5 ? "left" : "right";
+    const verticalSample = sample();
+    verticalTarget = (verticalSample < 0.5 ? -1 : 1) * (0.1 + verticalSample * 0.25);
+    verticalBias = 0;
+    lastRerouteAt = undefined;
+  }
+
+  function stopForDisabled(context) {
+    const shouldStop = context.mode === "crawling";
+    if (phase !== "idle") resetIdle();
+    return shouldStop ? { kind: "stop" } : { kind: "none" };
   }
 
   return Object.freeze({
@@ -41,11 +65,7 @@ function createAutonomousRoam({
         throw new TypeError("context must include enabled and mode");
       }
 
-      if (!context.enabled) {
-        const shouldStop = context.mode === "crawling";
-        resetIdle();
-        return shouldStop ? { kind: "stop" } : { kind: "none" };
-      }
+      if (!context.enabled) return stopForDisabled(context);
       if (!["idle", "crawling"].includes(context.mode)) return { kind: "none" };
 
       if (phase === "idle") {
@@ -66,18 +86,29 @@ function createAutonomousRoam({
         resetIdle();
         return { kind: "stop" };
       }
+      if (dtMs === 0) return { kind: "none" };
+
       const distance = speed * dtMs / 1000;
+      const interpolation = Math.min(1, dtMs / 1200);
+      verticalBias += (verticalTarget - verticalBias) * interpolation;
       return {
         kind: "move",
         direction,
         dx: direction === "left" ? -distance : distance,
-        dy: 0
+        dy: distance * verticalBias
       };
     },
-    blocked() {
+    blocked(nowMs) {
+      if (!Number.isFinite(nowMs)) throw new RangeError("nowMs must be finite");
       if (phase !== "crawl") return false;
+      if (lastRerouteAt !== undefined && nowMs < lastRerouteAt) return false;
+      if (lastRerouteAt !== undefined && nowMs - lastRerouteAt < 450) return false;
       direction = direction === "left" ? "right" : "left";
+      lastRerouteAt = nowMs;
       return direction;
+    },
+    cleared() {
+      lastRerouteAt = undefined;
     }
   });
 }

@@ -67,6 +67,7 @@ let backgroundModeCoordinator;
 let backgroundModeTransitions;
 let runtimePaused = false;
 let previousTick;
+let runtimeNowMs;
 let frameFaceBox;
 let bubbleReadyPromise = Promise.resolve(false);
 let activeBubbleText;
@@ -352,10 +353,12 @@ function createRuntime() {
 
   runtimePaused = false;
   previousTick = Date.now();
+  runtimeNowMs = 0;
   fallTimer = setInterval(() => {
     const now = Date.now();
     const dtMs = Math.min(100, Math.max(0, now - previousTick));
     previousTick = now;
+    runtimeNowMs += dtMs;
     if (runtimePaused) return;
     if (controller && autonomousRoam) {
       runRuntimeTick({
@@ -363,7 +366,8 @@ function createRuntime() {
         roam: autonomousRoam,
         settings: settingsStore.snapshot(),
         screen,
-        dtMs
+        dtMs,
+        nowMs: runtimeNowMs
       });
     }
   }, 16);
@@ -421,6 +425,7 @@ function stopRuntime() {
   fallTimer = undefined;
   runtimePaused = false;
   previousTick = undefined;
+  runtimeNowMs = undefined;
   if (windowSensor && windowSensor.stop() === false) windowSensor.stop();
   windowSensor = undefined;
   bubbleDisplayMonitor?.stop();

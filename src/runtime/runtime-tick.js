@@ -1,4 +1,14 @@
-function runRuntimeTick({ controller, roam, settings, screen, dtMs }) {
+function isFullyMoved(result) {
+  if (result.fullyMoved !== undefined) return result.fullyMoved === true;
+  return result.moved === true && result.blocked !== true;
+}
+
+function blockedHorizontally(result) {
+  if (Array.isArray(result.blockedAxes)) return result.blockedAxes.includes("x");
+  return result.blocked === true;
+}
+
+function runRuntimeTick({ controller, roam, settings, screen, dtMs, nowMs }) {
   controller.tick(dtMs);
   const snapshot = controller.snapshot();
   const intent = roam.tick(dtMs, {
@@ -11,8 +21,9 @@ function runRuntimeTick({ controller, roam, settings, screen, dtMs }) {
   else if (intent.kind === "move") {
     const workArea = screen.getDisplayMatching(snapshot.body).workArea;
     const result = controller.moveCrawl(intent.dx, intent.dy, workArea);
-    if (result.blocked) {
-      const direction = roam.blocked();
+    if (isFullyMoved(result)) roam.cleared();
+    else if (blockedHorizontally(result)) {
+      const direction = roam.blocked(nowMs);
       if (direction) controller.setCrawlDirection(direction);
     }
   }
