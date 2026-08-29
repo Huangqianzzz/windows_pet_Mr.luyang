@@ -252,15 +252,23 @@ function activeWindows() {
 }
 
 function setAllAlwaysOnTop(enabled) {
-  for (const window of activeWindows()) {
-    try { window.setAlwaysOnTop(enabled); } catch {}
+  const windows = activeWindows();
+  if (windows.length !== 3) return false;
+  let succeeded = true;
+  for (const window of windows) {
+    try { window.setAlwaysOnTop(enabled); } catch { succeeded = false; }
   }
+  return succeeded;
 }
 
 function sendBackgroundMode(paused) {
   if (!petWindow || petWindow.isDestroyed()) return false;
-  petWindow.webContents.send(BACKGROUND_MODE_CHANNEL, { paused });
-  return true;
+  try {
+    petWindow.webContents.send(BACKGROUND_MODE_CHANNEL, { paused });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function syncControllerObstacles() {
@@ -363,19 +371,27 @@ function createRuntime() {
   const foregroundGate = createForegroundGate({ settleMs: 250 });
   const windowZOrder = createWindowZOrder();
   backgroundModeTransitions = createBackgroundModeTransitions({
-    setRuntimePaused(paused) { runtimePaused = paused; },
-    setInputEnabled(enabled) { controller?.setInputEnabled(enabled); },
+    setRuntimePaused(paused) { runtimePaused = paused; return true; },
+    setInputEnabled(enabled) { return Boolean(controller?.setInputEnabled(enabled)); },
     hideBubble: hideSpeechBubble,
-    dismissSpeech() { void speechFlow?.dismiss(); },
+    dismissSpeech() { void speechFlow?.dismiss().catch(() => {}); return true; },
     sendRendererPaused: sendBackgroundMode,
     setAlwaysOnTop: setAllAlwaysOnTop,
     lowerWindows() {
-      for (const window of activeWindows()) {
-        try { windowZOrder.sendToBottom(window.getNativeWindowHandle()); } catch {}
+      const windows = activeWindows();
+      if (windows.length !== 3) return false;
+      let succeeded = true;
+      for (const window of windows) {
+        try {
+          if (!windowZOrder.sendToBottom(window.getNativeWindowHandle())) succeeded = false;
+        } catch {
+          succeeded = false;
+        }
       }
+      return succeeded;
     },
     refreshObstacles: syncControllerObstacles,
-    resetTickClock() { previousTick = Date.now(); }
+    resetTickClock() { previousTick = Date.now(); return true; }
   });
   backgroundModeCoordinator = createBackgroundModeCoordinator({
     readForeground: () => foregroundReader.snapshot(),
@@ -484,6 +500,7 @@ ipcMain.handle("desktop-pet:get-bootstrap", event => {
   if (!isTrustedIpcSender(event, petWindow)) return { accepted: false };
   return {
     appVersion: app.getVersion(),
+    backgroundPaused: runtimePaused,
     ...animationBootstrap
   };
 });

@@ -7,9 +7,11 @@ function createForegroundGate({ settleMs = 250 } = {}) {
   let candidateState = false;
   let candidateSince = 0;
   let lastNow = Number.NEGATIVE_INFINITY;
+  let lastTransition = null;
 
   return Object.freeze({
     tick(backgroundRequested, now) {
+      lastTransition = null;
       if (typeof backgroundRequested !== "boolean" || !Number.isFinite(now)) return "none";
       if (now < lastNow && candidateState !== stableState) candidateSince = now;
       lastNow = now;
@@ -25,8 +27,22 @@ function createForegroundGate({ settleMs = 250 } = {}) {
       }
       if (now - candidateSince < settleMs) return "none";
 
+      const previousStable = stableState;
       stableState = candidateState;
-      return stableState ? "enter" : "leave";
+      const action = stableState ? "enter" : "leave";
+      lastTransition = { action, previousStable };
+      return action;
+    },
+    confirm(action) {
+      if (lastTransition?.action !== action) return false;
+      lastTransition = null;
+      return true;
+    },
+    reject(action) {
+      if (lastTransition?.action !== action) return false;
+      stableState = lastTransition.previousStable;
+      lastTransition = null;
+      return true;
     }
   });
 }
@@ -55,15 +71,43 @@ function createBackgroundModeCoordinator({
 
       let action;
       try {
-        action = gate.tick(Boolean(classify(snapshot, targetDisplay)), now());
+        const backgroundRequested = classify(snapshot, targetDisplay);
+        if (typeof backgroundRequested !== "boolean") return "none";
+        action = gate.tick(backgroundRequested, now());
       } catch {
         return "none";
       }
-      if (action === "enter") enter();
-      else if (action === "leave") leave();
-      return action === "enter" || action === "leave" ? action : "none";
+      if (action !== "enter" && action !== "leave") return "none";
+
+      let transitioned = false;
+      try {
+        transitioned = (action === "enter" ? enter() : leave()) !== false;
+      } catch {
+        transitioned = false;
+      }
+      try {
+        if (transitioned) gate.confirm?.(action);
+        else gate.reject?.(action);
+      } catch {}
+      return transitioned ? action : "none";
     }
   });
+}
+
+function executeTransition(steps) {
+  const rollbacks = [];
+  try {
+    for (const [forward, rollback] of steps) {
+      if (rollback) rollbacks.push(rollback);
+      if (forward() === false) throw new Error("background transition rejected");
+    }
+    return true;
+  } catch {
+    for (let index = rollbacks.length - 1; index >= 0; index -= 1) {
+      try { rollbacks[index](); } catch {}
+    }
+    return false;
+  }
 }
 
 function createBackgroundModeTransitions({
@@ -81,26 +125,35 @@ function createBackgroundModeTransitions({
   return Object.freeze({
     enter() {
       if (background) return false;
+      const completed = executeTransition([
+        [() => setRuntimePaused(true), () => setRuntimePaused(false)],
+        [() => setInputEnabled(false), () => setInputEnabled(true)],
+        [hideBubble],
+        [dismissSpeech],
+        [() => sendRendererPaused(true), () => sendRendererPaused(false)],
+        [() => setAlwaysOnTop(false), () => setAlwaysOnTop(true)],
+        [lowerWindows]
+      ]);
+      if (!completed) return false;
       background = true;
-      setRuntimePaused(true);
-      setInputEnabled(false);
-      hideBubble();
-      dismissSpeech();
-      sendRendererPaused(true);
-      setAlwaysOnTop(false);
-      lowerWindows();
       return true;
     },
     leave() {
       if (!background) return false;
-      refreshObstacles();
-      resetTickClock();
-      setAlwaysOnTop(true);
-      sendRendererPaused(false);
-      setRuntimePaused(false);
-      setInputEnabled(true);
+      const completed = executeTransition([
+        [refreshObstacles],
+        [resetTickClock],
+        [() => setAlwaysOnTop(true), () => setAlwaysOnTop(false)],
+        [() => sendRendererPaused(false), () => sendRendererPaused(true)],
+        [() => setRuntimePaused(false), () => setRuntimePaused(true)],
+        [() => setInputEnabled(true), () => setInputEnabled(false)]
+      ]);
+      if (!completed) return false;
       background = false;
       return true;
+    },
+    snapshot() {
+      return { background };
     }
   });
 }

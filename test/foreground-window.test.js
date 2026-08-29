@@ -116,3 +116,26 @@ test("fullscreen classification uses display bounds rather than work area", () =
   assert.equal(classifyFullscreen({ x: 0, y: 0, width: 1000, height: 760 }, target), false);
   assert.equal(classifyFullscreen({ x: 0, y: 0, width: 1000, height: 796 }, target), true);
 });
+
+test("blocking classification preserves unknown when the foreground display cannot be resolved", () => {
+  const { isForegroundBlocking } = require(MODULE_PATH);
+  const target = display(1, { x: 0, y: 0, width: 1000, height: 800 });
+  const snapshot = {
+    hwnd: 7,
+    processId: 99,
+    rect: { ...target.bounds },
+    maximized: true,
+    fullscreen: true
+  };
+
+  assert.equal(isForegroundBlocking(snapshot, {
+    screen: { getDisplayMatching() { throw new Error("display unavailable"); } },
+    targetDisplay: target,
+    ownProcessId: 42
+  }), null);
+  assert.equal(isForegroundBlocking(snapshot, {
+    screen: { getDisplayMatching: () => undefined },
+    targetDisplay: target,
+    ownProcessId: 42
+  }), null);
+});

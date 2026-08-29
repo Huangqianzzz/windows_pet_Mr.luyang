@@ -116,3 +116,154 @@ test("background transitions are idempotent and restore input only after refresh
     "input:true"
   ]);
 });
+
+test("background coordinator stays entered through display-query errors longer than settle time", () => {
+  const {
+    createBackgroundModeCoordinator,
+    createForegroundGate
+  } = require("../src/runtime/foreground-gate");
+  const { isForegroundBlocking } = require("../src/windows/foreground-window");
+  const targetDisplay = { id: 1, bounds: { x: 0, y: 0, width: 1000, height: 800 } };
+  const foreground = {
+    hwnd: 7,
+    processId: 99,
+    rect: { ...targetDisplay.bounds },
+    maximized: true,
+    fullscreen: true
+  };
+  let now = 0;
+  let displayQueries = 0;
+  const actions = [];
+  const coordinator = createBackgroundModeCoordinator({
+    readForeground: () => foreground,
+    getPetBody: () => ({ x: 10, y: 10, width: 100, height: 100 }),
+    screen: { getDisplayMatching: () => targetDisplay },
+    classify(snapshot, display) {
+      return isForegroundBlocking(snapshot, {
+        screen: {
+          getDisplayMatching() {
+            displayQueries += 1;
+            if (displayQueries > 2 && displayQueries < 6) {
+              throw new Error("display query failed");
+            }
+            return targetDisplay;
+          }
+        },
+        targetDisplay: display,
+        ownProcessId: 42
+      });
+    },
+    gate: createForegroundGate({ settleMs: 250 }),
+    enter: () => actions.push("enter"),
+    leave: () => actions.push("leave"),
+    now: () => now
+  });
+
+  coordinator.poll();
+  now = 250;
+  coordinator.poll();
+  now = 300;
+  coordinator.poll();
+  now = 600;
+  coordinator.poll();
+  now = 900;
+  coordinator.poll();
+  assert.deepEqual(actions, ["enter"]);
+
+  now = 1000;
+  coordinator.poll();
+  assert.deepEqual(actions, ["enter"]);
+});
+
+test("failed enter does not escape the poll, consume the edge, or leave partial background state", () => {
+  const {
+    createBackgroundModeCoordinator,
+    createBackgroundModeTransitions,
+    createForegroundGate
+  } = require("../src/runtime/foreground-gate");
+  const state = { runtime: false, input: true, renderer: false, top: true };
+  let failLower = true;
+  const transitions = createBackgroundModeTransitions({
+    setRuntimePaused: value => { state.runtime = value; },
+    setInputEnabled: value => { state.input = value; },
+    hideBubble() {},
+    dismissSpeech() {},
+    sendRendererPaused: value => { state.renderer = value; },
+    setAlwaysOnTop: value => { state.top = value; },
+    lowerWindows() {
+      if (failLower) {
+        failLower = false;
+        throw new Error("SetWindowPos failed");
+      }
+    },
+    refreshObstacles() {},
+    resetTickClock() {}
+  });
+  const coordinator = createBackgroundModeCoordinator({
+    readForeground: () => ({ hwnd: 7 }),
+    getPetBody: () => ({ x: 0, y: 0, width: 1, height: 1 }),
+    screen: { getDisplayMatching: () => ({ id: 1 }) },
+    classify: () => true,
+    gate: createForegroundGate({ settleMs: 0 }),
+    enter: () => transitions.enter(),
+    leave: () => transitions.leave(),
+    now: () => 0
+  });
+
+  assert.doesNotThrow(() => assert.equal(coordinator.poll(), "none"));
+  assert.deepEqual(state, { runtime: false, input: true, renderer: false, top: true });
+  assert.deepEqual(transitions.snapshot(), { background: false });
+
+  assert.equal(coordinator.poll(), "enter");
+  assert.deepEqual(state, { runtime: true, input: false, renderer: true, top: false });
+  assert.deepEqual(transitions.snapshot(), { background: true });
+});
+
+test("failed leave rolls back to background and retries the same stable edge", () => {
+  const {
+    createBackgroundModeCoordinator,
+    createBackgroundModeTransitions,
+    createForegroundGate
+  } = require("../src/runtime/foreground-gate");
+  const state = { runtime: false, input: true, renderer: false, top: true };
+  let requested = true;
+  let failLeaveInput = false;
+  const transitions = createBackgroundModeTransitions({
+    setRuntimePaused: value => { state.runtime = value; },
+    setInputEnabled(value) {
+      state.input = value;
+      if (value && failLeaveInput) {
+        failLeaveInput = false;
+        throw new Error("hit window unavailable");
+      }
+    },
+    hideBubble() {},
+    dismissSpeech() {},
+    sendRendererPaused: value => { state.renderer = value; },
+    setAlwaysOnTop: value => { state.top = value; },
+    lowerWindows() {},
+    refreshObstacles() {},
+    resetTickClock() {}
+  });
+  const coordinator = createBackgroundModeCoordinator({
+    readForeground: () => ({ hwnd: 7 }),
+    getPetBody: () => ({ x: 0, y: 0, width: 1, height: 1 }),
+    screen: { getDisplayMatching: () => ({ id: 1 }) },
+    classify: () => requested,
+    gate: createForegroundGate({ settleMs: 0 }),
+    enter: () => transitions.enter(),
+    leave: () => transitions.leave(),
+    now: () => 0
+  });
+
+  assert.equal(coordinator.poll(), "enter");
+  requested = false;
+  failLeaveInput = true;
+  assert.doesNotThrow(() => assert.equal(coordinator.poll(), "none"));
+  assert.deepEqual(state, { runtime: true, input: false, renderer: true, top: false });
+  assert.deepEqual(transitions.snapshot(), { background: true });
+
+  assert.equal(coordinator.poll(), "leave");
+  assert.deepEqual(state, { runtime: false, input: true, renderer: false, top: true });
+  assert.deepEqual(transitions.snapshot(), { background: false });
+});

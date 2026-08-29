@@ -294,3 +294,43 @@ test("renderer combines rest and background pause reasons across bootstrap and p
   }));
   assert.deepEqual(player.calls.slice(-3), [["freeze"], ["play", "crawl"], ["freeze"]]);
 });
+
+test("renderer freezes from bootstrap truth when the initial background IPC was completely missed", async () => {
+  const { mountPet } = require("../src/render/pet-renderer");
+  const frame = {
+    source: { x: 0, y: 0, width: 10, height: 10 },
+    faceBox: { x: 2, y: 1, width: 5, height: 4 },
+    hitBox: { x: 1, y: 1, width: 8, height: 8 }
+  };
+  const manifest = {
+    actions: {
+      idle: {
+        sheet: { file: "idle.png", width: 10, height: 10 },
+        loop: true,
+        frames: [frame]
+      }
+    }
+  };
+  class Player {
+    constructor(received) { this.manifest = received; this.calls = []; }
+    play(name, options = {}) {
+      this.calls.push(["play", name]);
+      options.onFrame?.(frame, 0, name);
+      return this;
+    }
+    freeze() { this.calls.push(["freeze"]); return this; }
+    resume() { this.calls.push(["resume"]); return this; }
+  }
+  const mounted = mountPet({
+    document: {
+      getElementById: () => ({ append() {} }),
+      createElement: () => ({ style: {}, setAttribute() {} })
+    },
+    desktopPet: { getBootstrap: async () => ({ manifest, backgroundPaused: true }) },
+    AnimationPlayer: Player,
+    locationHref: "file:///C:/pet/src/render/pet.html",
+    eventTarget: localEventTarget()
+  });
+
+  assert.deepEqual((await mounted.ready).calls, [["play", "idle"], ["freeze"]]);
+});

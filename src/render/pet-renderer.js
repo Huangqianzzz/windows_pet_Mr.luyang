@@ -109,6 +109,7 @@
 
     let player;
     let currentFacing = "right";
+    let backgroundEventReceived = false;
     const pendingCommands = [];
     const pendingInteractions = [];
     const pauses = createPauseCoordinator({
@@ -207,12 +208,16 @@
     });
     eventTarget.addEventListener("desktop-pet:background-mode", event => {
       if (typeof event.detail?.paused === "boolean") {
+        backgroundEventReceived = true;
         pauses.set("background", event.detail.paused);
       }
     });
 
     const ready = desktopPet.getBootstrap()
-      .then(({ manifest }) => {
+      .then(({ manifest, backgroundPaused }) => {
+        if (!backgroundEventReceived && typeof backgroundPaused === "boolean") {
+          pauses.set("background", backgroundPaused);
+        }
         player = new AnimationPlayer(manifest);
         player.play("idle", {
           onFrame: reportFrame

@@ -60,15 +60,18 @@ function isForegroundBlocking(snapshot, {
   ownProcessId = process.pid,
   ownWindowHandles = []
 } = {}) {
-  if (!snapshot || !targetDisplay || snapshot.processId === ownProcessId) return false;
+  if (!snapshot) return null;
+  if (snapshot.processId === ownProcessId) return false;
   if (ownWindowHandles.some(hwnd => hwnd === snapshot.hwnd)) return false;
+  if (!screen || !targetDisplay) return null;
   let foregroundDisplay;
   try {
-    foregroundDisplay = screen?.getDisplayMatching(snapshot.rect);
+    foregroundDisplay = screen.getDisplayMatching(snapshot.rect);
   } catch {
-    return false;
+    return null;
   }
-  if (!foregroundDisplay || foregroundDisplay.id !== targetDisplay.id) return false;
+  if (!foregroundDisplay) return null;
+  if (foregroundDisplay.id !== targetDisplay.id) return false;
   return Boolean(snapshot.maximized || snapshot.fullscreen);
 }
 
