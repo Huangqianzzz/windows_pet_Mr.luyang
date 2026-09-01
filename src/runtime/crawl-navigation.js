@@ -2,6 +2,45 @@ function cloneRect(rect) {
   return Object.freeze({ x: rect.x, y: rect.y, width: rect.width, height: rect.height });
 }
 
+function validateRect(name, rect) {
+  if (!rect || typeof rect !== "object") throw new TypeError(`${name} must be a rectangle`);
+  for (const key of ["x", "y", "width", "height"]) {
+    if (!Number.isFinite(rect[key])) throw new TypeError(`${name}.${key} must be finite`);
+  }
+  if (rect.width <= 0 || rect.height <= 0) throw new RangeError(`${name} must have positive area`);
+}
+
+function validateObstacle(name, obstacle) {
+  if (!obstacle || typeof obstacle !== "object") throw new TypeError(`${name} must be an obstacle`);
+  if (typeof obstacle.id !== "string" || typeof obstacle.source !== "string") {
+    throw new TypeError(`${name} must have string source and id`);
+  }
+  validateRect(`${name}.rect`, obstacle.rect);
+  if (Object.hasOwn(obstacle, "hwnd") && !Number.isSafeInteger(obstacle.hwnd)) {
+    throw new TypeError(`${name}.hwnd must be a safe integer`);
+  }
+}
+
+function validateStepInput({ body, dx, dy, workArea, obstacles }) {
+  validateRect("body", body);
+  validateRect("workArea", workArea);
+  if (body.width > workArea.width || body.height > workArea.height) {
+    throw new RangeError("body must fit in workArea");
+  }
+  if (!Number.isFinite(dx) || !Number.isFinite(dy)) throw new TypeError("dx and dy must be finite");
+  if (!Array.isArray(obstacles)) throw new TypeError("obstacles must be an array");
+  obstacles.forEach((obstacle, index) => validateObstacle(`obstacles[${index}]`, obstacle));
+}
+
+function validateEscapeInput({ body, target, obstacles, clearance }) {
+  validateRect("body", body);
+  validateObstacle("target", target);
+  if (!Array.isArray(obstacles)) throw new TypeError("obstacles must be an array");
+  obstacles.forEach((obstacle, index) => validateObstacle(`obstacles[${index}]`, obstacle));
+  if (!Number.isFinite(clearance)) throw new TypeError("clearance must be finite");
+  if (clearance < 0) throw new RangeError("clearance must be non-negative");
+}
+
 function cloneTarget(obstacle) {
   const target = {
     id: obstacle.id,
@@ -64,12 +103,49 @@ function movesAwayFromOverlap(body, dx, dy, obstacle) {
     (bodyCenterY >= obstacleCenterY && dy > 0);
 }
 
+function overlapAreaAt(body, dx, dy, rect, time) {
+  return overlapArea({ ...body, x: body.x + dx * time, y: body.y + dy * time }, rect);
+}
+
+function overlapBreakpoints(body, dx, dy, rect) {
+  const times = new Set([0, 1]);
+  for (const [start, size, delta, min, max] of [
+    [body.x, body.width, dx, rect.x, rect.x + rect.width],
+    [body.y, body.height, dy, rect.y, rect.y + rect.height]
+  ]) {
+    if (delta === 0) continue;
+    for (const boundary of [min - start, max - start, min - (start + size), max - (start + size)]) {
+      const time = boundary / delta;
+      if (time > 0 && time < 1) times.add(time);
+    }
+  }
+  return Array.from(times).sort((a, b) => a - b);
+}
+
+function strictlyReducesOverlapThroughout(body, dx, dy, rect) {
+  const initialArea = overlapArea(body, rect);
+  const finalArea = overlapAreaAt(body, dx, dy, rect, 1);
+  if (finalArea >= initialArea || !movesAwayFromOverlap(body, dx, dy, { rect })) return false;
+
+  for (const [start, end] of overlapBreakpoints(body, dx, dy, rect).slice(0, -1).map((time, index, times) => [time, times[index + 1]])) {
+    const middle = (start + end) / 2;
+    const startArea = overlapAreaAt(body, dx, dy, rect, start);
+    const middleArea = overlapAreaAt(body, dx, dy, rect, middle);
+    const endArea = overlapAreaAt(body, dx, dy, rect, end);
+    const quadratic = 2 * (endArea + startArea - 2 * middleArea);
+    const slopeAtStart = endArea - startArea - quadratic;
+    const slopeAtEnd = slopeAtStart + 2 * quadratic;
+    if (slopeAtStart > 1e-9 || slopeAtEnd > 1e-9) return false;
+  }
+  return true;
+}
+
 function isStepClear(body, dx, dy, obstacles) {
   const end = { ...body, x: body.x + dx, y: body.y + dy };
   for (const obstacle of obstacles) {
     const initialOverlap = overlapArea(body, obstacle.rect);
     if (initialOverlap > 0) {
-      if (!movesAwayFromOverlap(body, dx, dy, obstacle) || overlapArea(end, obstacle.rect) >= initialOverlap) {
+      if (!strictlyReducesOverlapThroughout(body, dx, dy, obstacle.rect)) {
         return false;
       }
       continue;
@@ -82,18 +158,17 @@ function isStepClear(body, dx, dy, obstacles) {
 function firstHorizontalWindowContact(body, dx, obstacles) {
   if (dx === 0) return null;
   const contacts = obstacles
-    .filter(obstacle => obstacle.source === "window" && overlapArea(body, obstacle.rect) === 0)
+    .filter(obstacle => overlapArea(body, obstacle.rect) === 0)
     .map(obstacle => ({ obstacle, time: sweepTime(body, dx, 0, obstacle) }))
     .filter(contact => contact.time !== null)
-    .map(({ obstacle, time }) => ({
-      target: cloneTarget(obstacle),
-      edge: dx > 0 ? "left" : "right",
-      t: clamp((body.y + body.height / 2 - obstacle.rect.y) / obstacle.rect.height, 0, 1),
-      distance: Math.abs(dx) * time
-    }))
-    .sort((a, b) => a.distance - b.distance || a.target.id.localeCompare(b.target.id) || a.edge.localeCompare(b.edge));
+    .sort((a, b) => a.time - b.time || a.obstacle.id.localeCompare(b.obstacle.id) ||
+      a.obstacle.source.localeCompare(b.obstacle.source));
   if (contacts.length === 0) return null;
-  const { target, edge, t } = contacts[0];
+  const { obstacle, time } = contacts[0];
+  if (obstacle.source !== "window") return null;
+  const target = cloneTarget(obstacle);
+  const edge = dx > 0 ? "left" : "right";
+  const t = clamp((body.y + body.height / 2 - obstacle.rect.y) / obstacle.rect.height, 0, 1);
   return Object.freeze({ target, edge, t });
 }
 
@@ -112,6 +187,7 @@ function requestedAxes(dx, dy) {
 }
 
 function resolveCrawlStep({ body, dx, dy, workArea, obstacles }) {
+  validateStepInput({ body, dx, dy, workArea, obstacles });
   const requested = requestedAxes(dx, dy);
   const limited = clampedDelta(body, dx, dy, workArea);
   const completeClear = isStepClear(body, limited.dx, limited.dy, obstacles);
@@ -149,11 +225,12 @@ function segmentClear(body, from, to, obstacles) {
 }
 
 function planBehindWindowEscape({ body, target, obstacles, clearance }) {
-  if (!target || target.source !== "window" || !Array.isArray(obstacles)) return null;
+  validateEscapeInput({ body, target, obstacles, clearance });
+  if (target.source !== "window") return null;
   const currentTarget = obstacles.find(obstacle => sameIdentity(obstacle, target));
   if (!currentTarget || currentTarget.source !== "window") return null;
 
-  const gap = Number.isFinite(clearance) && clearance >= 0 ? clearance : 0;
+  const gap = clearance;
   const rect = currentTarget.rect;
   const others = obstacles.filter(obstacle => !sameIdentity(obstacle, currentTarget));
   const exits = [

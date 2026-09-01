@@ -174,3 +174,52 @@ test("refuses a behind-window route when all exits are blocked or target identit
     clearance: 5
   }), null);
 });
+
+test("does not promote a distant window when taskbar or desktop icon is the first horizontal contact", () => {
+  for (const source of ["taskbar", "desktop-icon"]) {
+    const result = resolveCrawlStep({
+      body: rect(0, 30), dx: 120, dy: 0, workArea,
+      obstacles: [
+        obstacle(`${source}:near`, source, rect(15, 0, 10, 100)),
+        obstacle("window:far", "window", rect(100, 0, 20, 100), 71)
+      ]
+    });
+    assert.equal(result.contactCandidate, null, source);
+  }
+});
+
+test("rejects an initially overlapping path that would exit and cross the expanded obstacle", () => {
+  const target = obstacle("window:target", "window", rect(0, 0, 100, 100), 72);
+  const body = rect(-9, -9);
+  const result = resolveCrawlStep({ body, dx: 118, dy: -1, workArea: rect(-100, -100, 400, 400), obstacles: [target] });
+
+  assert.equal(result.fullyMoved, false);
+  assert.equal(result.body.x, body.x);
+  assert.equal(result.body.y, -10);
+  assert.deepEqual(result.blockedAxes, ["x"]);
+  assert.equal(intersects(result.body, target.rect), false);
+});
+
+test("fails fast for malformed navigation geometry while permitting negative coordinates", () => {
+  const negative = resolveCrawlStep({
+    body: rect(-30, -40), dx: 5, dy: 6, workArea: rect(-100, -100, 200, 200), obstacles: []
+  });
+  assert.deepEqual(negative.body, rect(-25, -34));
+
+  const valid = { body: rect(0, 0), dx: 1, dy: 1, workArea, obstacles: [] };
+  assert.throws(() => resolveCrawlStep({ ...valid, body: rect(0, 0, 0, 10) }), /positive/);
+  assert.throws(() => resolveCrawlStep({ ...valid, workArea: rect(0, 0, 0, 10) }), /positive/);
+  assert.throws(() => resolveCrawlStep({ ...valid, body: { ...valid.body, x: Number.NaN } }), /finite/);
+  assert.throws(() => resolveCrawlStep({ ...valid, dx: Number.NaN }), /finite/);
+  assert.throws(() => resolveCrawlStep({ ...valid, obstacles: {} }), /array/);
+  assert.throws(() => resolveCrawlStep({ ...valid, obstacles: [obstacle("window:bad", "window", rect(0, 0, -1, 10), 1)] }), /positive/);
+  assert.throws(() => resolveCrawlStep({ ...valid, body: rect(0, 0, 201, 10) }), /fit/);
+
+  const target = obstacle("window:target", "window", rect(0, 0, 20, 20), 73);
+  assert.throws(() => planBehindWindowEscape({
+    body: rect(1, 1), target: { ...target, rect: rect(0, 0, 0, 20) }, obstacles: [target], clearance: 1
+  }), /positive/);
+  assert.throws(() => planBehindWindowEscape({
+    body: rect(1, 1), target, obstacles: [target], clearance: Number.NaN
+  }), /finite/);
+});
