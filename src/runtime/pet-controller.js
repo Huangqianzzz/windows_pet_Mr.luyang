@@ -5,8 +5,14 @@ const {
   resolveAttachment
 } = require("../domain/attachment");
 const { stepFall } = require("../domain/fall");
-const { clampRect, intersects } = require("../domain/geometry");
+const { intersects } = require("../domain/geometry");
 const { initialState, reducePetState } = require("../domain/pet-state");
+const { resolveCrawlStep } = require("./crawl-navigation");
+
+const AUTO_CLIMB_THRESHOLD_MS = 2000;
+const AUTO_CLIMB_SPEED = 60;
+// 覆盖首次锚点对齐差（生产 wall-climb 锚点 {69,8} 相对 body 中心的偏移）。
+const AUTO_CLIMB_ANCHOR_TOLERANCE = 128;
 
 const INPUT_ACTIONS = Object.freeze(["drag-start", "drag-move", "drag-end"]);
 const ATTACHED_RECOVERY_ACTIONS = new Set([
@@ -44,10 +50,14 @@ function validHitBox(hitBox) {
     && hitBox.width > 0 && hitBox.height > 0;
 }
 
-function overlapArea(first, second) {
-  const width = Math.max(0, Math.min(first.x + first.width, second.x + second.width) - Math.max(first.x, second.x));
-  const height = Math.max(0, Math.min(first.y + first.height, second.y + second.height) - Math.max(first.y, second.y));
-  return width * height;
+function sameIdentity(first, second) {
+  return first.source === second.source && first.id === second.id
+    && Object.hasOwn(first, "hwnd") === Object.hasOwn(second, "hwnd")
+    && (!Object.hasOwn(first, "hwnd") || first.hwnd === second.hwnd);
+}
+
+function cloneRect(rect) {
+  return Object.freeze({ x: rect.x, y: rect.y, width: rect.width, height: rect.height });
 }
 
 function canEscapeCoveredObstacle(body, obstacle, candidate, workArea) {
@@ -78,7 +88,10 @@ class PetController {
     choosePose = choices => choices[0],
     poseAnchors = {},
     gravity,
-    releaseThreshold = 24
+    releaseThreshold = 24,
+    autoClimbThresholdMs = AUTO_CLIMB_THRESHOLD_MS,
+    autoClimbSpeed = AUTO_CLIMB_SPEED,
+    autoClimbAnchorTolerance = AUTO_CLIMB_ANCHOR_TOLERANCE
   }) {
     if (!obstacleIndex || typeof obstacleIndex.snapshot !== "function") {
       throw new TypeError("PetController requires an ObstacleIndex");
@@ -93,6 +106,15 @@ class PetController {
     if (typeof choosePose !== "function") throw new TypeError("choosePose must be a function");
     if (!Number.isFinite(releaseThreshold) || releaseThreshold < 0) {
       throw new RangeError("releaseThreshold must be non-negative");
+    }
+    if (!Number.isFinite(autoClimbThresholdMs) || autoClimbThresholdMs < 0) {
+      throw new RangeError("autoClimbThresholdMs must be non-negative");
+    }
+    if (!Number.isFinite(autoClimbSpeed) || autoClimbSpeed <= 0) {
+      throw new RangeError("autoClimbSpeed must be positive");
+    }
+    if (!Number.isFinite(autoClimbAnchorTolerance) || autoClimbAnchorTolerance < 0) {
+      throw new RangeError("autoClimbAnchorTolerance must be non-negative");
     }
 
     this.obstacleIndex = obstacleIndex;
@@ -111,6 +133,9 @@ class PetController {
     })));
     this.gravity = gravity;
     this.releaseThreshold = releaseThreshold;
+    this.autoClimbThresholdMs = autoClimbThresholdMs;
+    this.autoClimbSpeed = autoClimbSpeed;
+    this.autoClimbAnchorTolerance = autoClimbAnchorTolerance;
     this.state = initialState();
     this.attachment = null;
     this.dragOffset = null;
@@ -120,6 +145,8 @@ class PetController {
     this.frameSupportAnchor = null;
     this.restResumeState = null;
     this.speechResumeState = null;
+    this.autoClimb = null;
+    this.autoClimbBlockedMs = 0;
   }
 
   snapshot() {
@@ -215,6 +242,7 @@ class PetController {
     const next = reducePetState(this.state, { type: "CRAWL" });
     if (next.mode !== "crawling" || this.state.mode === "crawling") return false;
     this.state = next;
+    this.#clearAutoClimb();
     this.#playAnimation("crawl", undefined, false, direction);
     return true;
   }
@@ -227,30 +255,177 @@ class PetController {
   stopCrawl() {
     if (this.state.mode !== "crawling") return false;
     this.state = reducePetState(this.state, { type: "CRAWL_COMPLETE" });
+    this.#clearAutoClimb();
     this.#playAnimation("idle");
     return true;
   }
 
-  moveCrawl(dx, dy, workArea) {
-    if (this.state.mode !== "crawling") return { moved: false, blocked: false };
-    if (![dx, dy].every(Number.isFinite)
+  moveCrawl(dx, dy, workArea, { dtMs = 0, nowMs = 0 } = {}) {
+    if (this.state.mode !== "crawling") {
+      return { body: { ...this.body }, moved: false, fullyMoved: false, blockedAxes: [], climbCandidate: null };
+    }
+    if (![dx, dy, dtMs, nowMs].every(Number.isFinite) || dtMs < 0
       || !workArea || ![workArea.x, workArea.y, workArea.width, workArea.height].every(Number.isFinite)
       || workArea.width <= 0 || workArea.height <= 0) {
-      throw new TypeError("crawl movement and work area must be finite");
+      throw new TypeError("crawl movement, timing and work area must be finite");
     }
-    const desired = { ...this.body, x: this.body.x + dx, y: this.body.y + dy };
-    const candidate = clampRect(desired, workArea);
-    const blockedByBounds = candidate.x !== desired.x || candidate.y !== desired.y;
-    const blockedByObstacle = this.obstacleIndex.snapshot().some(obstacle => {
-      if (!obstacle?.rect || !intersects(candidate, obstacle.rect)) return false;
-      if (!intersects(this.body, obstacle.rect)) return true;
-      if (canEscapeCoveredObstacle(this.body, obstacle.rect, candidate, workArea)) return false;
-      return overlapArea(candidate, obstacle.rect) >= overlapArea(this.body, obstacle.rect);
+    const obstacles = this.obstacleIndex.snapshot();
+    const result = resolveCrawlStep({ body: this.body, dx, dy, workArea, obstacles });
+    if (!result.moved) {
+      // 被障碍完全覆盖时，允许朝能最终离开该障碍的方向移动，避免永久卡死。
+      // 其余障碍仍保持实体：终点不得撞入任何非覆盖源障碍。
+      const candidate = {
+        x: Math.min(Math.max(this.body.x + dx, workArea.x), workArea.x + workArea.width - this.body.width),
+        y: Math.min(Math.max(this.body.y + dy, workArea.y), workArea.y + workArea.height - this.body.height),
+        width: this.body.width,
+        height: this.body.height
+      };
+      const coveredSource = obstacles.some(obstacle =>
+        canEscapeCoveredObstacle(this.body, obstacle.rect, candidate, workArea));
+      const clearOfOthers = obstacles.every(obstacle =>
+        canEscapeCoveredObstacle(this.body, obstacle.rect, candidate, workArea)
+        || !intersects(candidate, obstacle.rect));
+      if (coveredSource && clearOfOthers) {
+        const xClamped = candidate.x !== this.body.x + dx;
+        const yClamped = candidate.y !== this.body.y + dy;
+        const blockedAxes = Object.freeze([
+          xClamped && dx !== 0 ? "x" : null,
+          yClamped && dy !== 0 ? "y" : null
+        ].filter(Boolean));
+        const fullyMoved = !xClamped && !yClamped;
+        this.#moveBody(candidate.x, candidate.y);
+        if (fullyMoved) this.autoClimbBlockedMs = 0;
+        else if (blockedAxes.includes("x")) this.autoClimbBlockedMs += dtMs;
+        return Object.freeze({
+          body: { ...candidate },
+          moved: candidate.x !== result.body.x || candidate.y !== result.body.y,
+          fullyMoved,
+          blockedAxes,
+          climbCandidate: null
+        });
+      }
+    } else {
+      this.#moveBody(result.body.x, result.body.y);
+    }
+
+    if (result.fullyMoved) {
+      this.autoClimbBlockedMs = 0;
+    } else if (result.blockedAxes.includes("x")) {
+      this.autoClimbBlockedMs += dtMs;
+    }
+    const climbCandidate = result.contactCandidate !== null && this.autoClimbBlockedMs >= this.autoClimbThresholdMs
+      ? result.contactCandidate
+      : null;
+    return Object.freeze({
+      body: { ...result.body },
+      moved: result.moved,
+      fullyMoved: result.fullyMoved,
+      blockedAxes: result.blockedAxes,
+      climbCandidate
     });
-    if (blockedByObstacle) return { moved: false, blocked: true };
-    const moved = candidate.x !== this.body.x || candidate.y !== this.body.y;
-    if (moved) this.#moveBody(candidate.x, candidate.y);
-    return { moved, blocked: blockedByBounds };
+  }
+
+  beginAutoClimb(candidate) {
+    if (this.state.mode !== "crawling" || !candidate || typeof candidate !== "object") return false;
+    const { target, edge, t } = candidate;
+    if (!target || typeof target !== "object"
+      || target.source !== "window" || typeof target.id !== "string") return false;
+    if (edge !== "left" && edge !== "right") return false;
+    if (!Number.isFinite(t) || t < 0 || t > 1) return false;
+
+    const current = this.obstacleIndex.snapshot().find(obstacle => sameIdentity(obstacle, target));
+    if (!current || current.source !== "window") return false;
+    let attachment;
+    try {
+      attachment = createAttachment(current, edge, t, "wall-climb");
+    } catch {
+      return false;
+    }
+
+    const previousState = this.state;
+    const previousAttachment = this.attachment;
+    const previousBody = this.body;
+    const nextState = reducePetState(previousState, { type: "AUTO_ATTACH" });
+    if (nextState.mode !== "attached") return false;
+
+    this.state = nextState;
+    this.attachment = attachment;
+    this.autoClimb = { entryBody: { ...previousBody } };
+    this.autoClimbBlockedMs = 0;
+    if (!this.#playAnimation("wall-climb", undefined, false, this.#attachmentFacing())) {
+      this.state = previousState;
+      this.attachment = previousAttachment;
+      this.body = previousBody;
+      this.autoClimb = null;
+      return false;
+    }
+    return true;
+  }
+
+  isAutoClimbing() {
+    return Boolean(this.autoClimb && this.state.mode === "attached");
+  }
+
+  advanceAutoClimb(dtMs, workArea) {
+    const idle = { moved: false, stalled: false, target: null, atEdge: false };
+    if (!this.autoClimb || this.state.mode !== "attached") return idle;
+    if (!Number.isFinite(dtMs) || dtMs < 0) throw new RangeError("dtMs must be non-negative");
+    if (!workArea || ![workArea.x, workArea.y, workArea.width, workArea.height].every(Number.isFinite)) {
+      throw new TypeError("work area must be finite");
+    }
+
+    const obstacles = this.obstacleIndex.snapshot();
+    const current = obstacles.find(obstacle =>
+      this.attachment && sameIdentity(obstacle, this.attachment.target));
+    if (!current || !this.attachment) {
+      return { moved: false, stalled: true, target: null, atEdge: false };
+    }
+    const edgeLength = current.rect.height;
+    if (edgeLength <= 0) return { moved: false, stalled: true, target: null, atEdge: false };
+
+    const direction = this.attachment.t < 0.5 ? -1 : 1;
+    const nextT = Math.min(1, Math.max(0,
+      this.attachment.t + direction * this.autoClimbSpeed * (dtMs / 1000) / edgeLength));
+    const resolved = resolveAttachment({ ...this.attachment, t: nextT }, current.rect);
+    const point = this.#attachedBodyPoint(resolved.point);
+    const nextBody = { ...this.body, x: point.x, y: point.y };
+
+    if (this.autoClimb.firstStep !== false) {
+      const jump = Math.hypot(nextBody.x - this.autoClimb.entryBody.x, nextBody.y - this.autoClimb.entryBody.y);
+      if (jump > this.autoClimbSpeed * (dtMs / 1000) + this.autoClimbAnchorTolerance) {
+        return { moved: false, stalled: true, target: this.#targetInfo(current), atEdge: false };
+      }
+      this.autoClimb.firstStep = false;
+    }
+    const intersectsWindow = obstacles.some(obstacle => intersects(nextBody, obstacle.rect));
+    if (intersectsWindow) {
+      return { moved: false, stalled: true, target: this.#targetInfo(current), atEdge: false };
+    }
+
+    const moved = nextBody.x !== this.body.x || nextBody.y !== this.body.y;
+    this.attachment = resolved.anchor;
+    if (moved) this.#moveBody(nextBody.x, nextBody.y);
+    return {
+      moved,
+      stalled: false,
+      target: this.#targetInfo(current),
+      atEdge: nextT <= 0 || nextT >= 1
+    };
+  }
+
+  #targetInfo(obstacle) {
+    const target = {
+      id: obstacle.id,
+      source: obstacle.source,
+      rect: cloneRect(obstacle.rect)
+    };
+    if (Object.hasOwn(obstacle, "hwnd")) target.hwnd = obstacle.hwnd;
+    return Object.freeze(target);
+  }
+
+  #clearAutoClimb() {
+    this.autoClimb = null;
+    this.autoClimbBlockedMs = 0;
   }
 
   supportLost() {
@@ -261,6 +436,7 @@ class PetController {
     this.frameHitBox = null;
     this.restResumeState = null;
     this.speechResumeState = null;
+    this.#clearAutoClimb();
     this.#hideHitRegion();
     this.#playAnimation("fall", undefined, true);
     return previous !== this.state || previous.mode === "falling";
@@ -303,6 +479,7 @@ class PetController {
     this.#hideHitRegion();
     if (result.landing) {
       this.state = reducePetState(this.state, { type: "LAND" });
+      this.#clearAutoClimb();
       if (!this.#playAnimation("land", () => {
         this.state = reducePetState(this.state, { type: "ACTION_COMPLETE" });
       }, true)) {
@@ -344,6 +521,7 @@ class PetController {
     this.state = nextState;
     this.attachment = null;
     this.frameSupportAnchor = null;
+    this.#clearAutoClimb();
     this.dragOffset = { x: this.body.x - point.x, y: this.body.y - point.y };
     this.#playAnimation("drag");
     return { accepted: true };
@@ -370,6 +548,7 @@ class PetController {
     const release = findReleaseZone(point, this.obstacleIndex.snapshot(), this.releaseThreshold);
     const pose = chooseReleasePose(release.zone, this.choosePose);
     this.dragOffset = null;
+    this.#clearAutoClimb();
 
     if (release.zone === "open") {
       this.attachment = null;

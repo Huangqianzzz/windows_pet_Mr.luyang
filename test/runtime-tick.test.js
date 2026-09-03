@@ -97,6 +97,68 @@ test("runtime tick forwards a disabled autonomous setting without moving", () =>
   assert.deepEqual(context, { enabled: false, mode: "idle" });
 });
 
+test("runtime tick passes timing into moveCrawl and climbs once from a candidate", () => {
+  const calls = [];
+  const candidate = { target: { id: "window:1", source: "window" }, edge: "left", t: 0.5 };
+  const controller = {
+    tick() {},
+    snapshot() { return { state: { mode: "crawling" }, body }; },
+    moveCrawl(dx, dy, area, timing) {
+      calls.push(["move", dx, dy, timing]);
+      return { moved: false, fullyMoved: false, blockedAxes: ["x"], climbCandidate: candidate };
+    },
+    setCrawlDirection(direction) { calls.push(["face", direction]); },
+    beginAutoClimb(value) { calls.push(["climb", value]); return true; }
+  };
+  const roam = {
+    tick() { return { kind: "move", direction: "right", dx: 4, dy: 1 }; },
+    blocked() { calls.push(["blocked"]); return false; },
+    cleared() { calls.push(["cleared"]); }
+  };
+  const screen = { getDisplayMatching() { return { workArea }; } };
+
+  runRuntimeTick({ controller, roam, settings: { autonomousActivity: true }, screen, dtMs: 16, nowMs: 300 });
+
+  assert.deepEqual(calls.filter(entry => entry[0] === "move"),
+    [["move", 4, 1, { dtMs: 16, nowMs: 300 }]]);
+  assert.deepEqual(calls.filter(entry => entry[0] === "climb"), [["climb", candidate]]);
+  assert.equal(calls.some(entry => entry[0] === "cleared"), false);
+});
+
+test("runtime tick advances an automatic climb instead of roaming while attached", () => {
+  const calls = [];
+  const controller = {
+    tick() {},
+    snapshot() { return { state: { mode: "attached" }, body }; },
+    isAutoClimbing() { return true; },
+    advanceAutoClimb(dtMs, area) { calls.push(["advance", dtMs, area]); return { moved: true }; }
+  };
+  const roam = { tick() { calls.push(["roam"]); return { kind: "none" }; } };
+  const screen = { getDisplayMatching() { return { workArea }; } };
+
+  const intent = runRuntimeTick({
+    controller, roam, settings: { autonomousActivity: true }, screen, dtMs: 16, nowMs: 400
+  });
+
+  assert.deepEqual(intent, { kind: "auto-climb" });
+  assert.deepEqual(calls, [["advance", 16, workArea]]);
+});
+
+test("runtime tick leaves manually attached pets to roam normally", () => {
+  const calls = [];
+  const controller = {
+    tick() {},
+    snapshot() { return { state: { mode: "attached" }, body }; },
+    isAutoClimbing() { return false; },
+    advanceAutoClimb() { calls.push(["advance"]); }
+  };
+  const roam = { tick() { calls.push(["roam"]); return { kind: "none" }; } };
+  const screen = { getDisplayMatching() { return { workArea }; } };
+
+  runRuntimeTick({ controller, roam, settings: { autonomousActivity: true }, screen, dtMs: 16, nowMs: 400 });
+  assert.deepEqual(calls, [["roam"]]);
+});
+
 test("main runtime owns one autonomous scheduler and supplies its monotonic tick time", () => {
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "main.js"), "utf8");
   assert.match(main, /createAutonomousRoam/);

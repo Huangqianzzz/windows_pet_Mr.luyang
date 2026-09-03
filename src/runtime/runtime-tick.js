@@ -11,6 +11,12 @@ function blockedHorizontally(result) {
 function runRuntimeTick({ controller, roam, settings, screen, dtMs, nowMs }) {
   controller.tick(dtMs);
   const snapshot = controller.snapshot();
+  if (snapshot.state.mode === "attached" && settings.autonomousActivity !== false
+    && typeof controller.isAutoClimbing === "function" && controller.isAutoClimbing()) {
+    const workArea = screen.getDisplayMatching(snapshot.body).workArea;
+    controller.advanceAutoClimb(dtMs, workArea);
+    return { kind: "auto-climb" };
+  }
   const intent = roam.tick(dtMs, {
     enabled: settings.autonomousActivity,
     mode: snapshot.state.mode
@@ -20,12 +26,13 @@ function runRuntimeTick({ controller, roam, settings, screen, dtMs, nowMs }) {
   else if (intent.kind === "stop") controller.stopCrawl();
   else if (intent.kind === "move") {
     const workArea = screen.getDisplayMatching(snapshot.body).workArea;
-    const result = controller.moveCrawl(intent.dx, intent.dy, workArea);
+    const result = controller.moveCrawl(intent.dx, intent.dy, workArea, { dtMs, nowMs });
     if (isFullyMoved(result)) roam.cleared();
     else if (blockedHorizontally(result)) {
       const direction = roam.blocked(nowMs);
       if (direction) controller.setCrawlDirection(direction);
     }
+    if (result.climbCandidate) controller.beginAutoClimb(result.climbCandidate);
   }
   return intent;
 }

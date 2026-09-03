@@ -84,6 +84,29 @@ test("support loss remains an explicit high-priority exit from attachment", () =
   assert.equal(reducePetState(attached, { type: "SUPPORT_LOST" }).mode, "falling");
 });
 
+test("AUTO_ATTACH only transitions crawling to attached", () => {
+  const crawling = reducePetState(initialState(), { type: "CRAWL" });
+  const attached = reducePetState(crawling, { type: "AUTO_ATTACH" });
+
+  assert.deepEqual(attached, { mode: "attached" });
+  assert.equal(Object.isFrozen(attached), true);
+  assert.equal(Object.getPrototypeOf(attached), Object.prototype);
+
+  const untouched = [
+    initialState(),
+    reducePetState(initialState(), { type: "DRAG_START" }),
+    reducePetState(initialState(), { type: "ATTACH" }),
+    reducePetState(initialState(), { type: "REST" }),
+    reducePetState(initialState(), { type: "SPEAK" }),
+    reducePetState(initialState(), { type: "FALL" })
+  ];
+  for (const state of untouched) {
+    assert.equal(reducePetState(state, { type: "AUTO_ATTACH" }), state, state.mode);
+  }
+
+  assert.equal(reducePetState(attached, { type: "SUPPORT_LOST" }).mode, "falling");
+});
+
 test("autonomous crawl completes explicitly back to idle", () => {
   const crawling = reducePetState(initialState(), { type: "CRAWL" });
   assert.equal(crawling.mode, "crawling");

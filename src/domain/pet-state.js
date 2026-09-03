@@ -4,6 +4,7 @@ const EVENT_MODES = Object.freeze({
   RANDOM_ROAM: "crawling",
   DRAG_START: "dragging",
   ATTACH: "attached",
+  AUTO_ATTACH: "attached",
   SUPPORT_LOST: "falling",
   FALL: "falling",
   SPEAK: "speaking",
@@ -33,6 +34,9 @@ function canInterrupt(state, eventType) {
 }
 
 function reducePetState(state, event) {
+  if (event?.type === "AUTO_ATTACH") {
+    return state.mode === "crawling" ? Object.freeze({ mode: "attached" }) : state;
+  }
   if (state.mode === "resting") {
     if (event?.type === "SUPPORT_LOST") return Object.freeze({ mode: "falling" });
     if (event?.type === "RESUME" && event.resumeState && typeof event.resumeState.mode === "string") {

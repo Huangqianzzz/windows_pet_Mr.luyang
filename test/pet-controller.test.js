@@ -2,9 +2,12 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { ObstacleIndex } = require("../src/runtime/obstacle-index");
 const { PetController, validatePetAction } = require("../src/runtime/pet-controller");
+const { intersects } = require("../src/domain/geometry");
 
-function obstacle(id, rect, source = "window") {
-  return { source, id, rect };
+function obstacle(id, rect, source = "window", hwnd) {
+  const value = { source, id, rect };
+  if (hwnd !== undefined) value.hwnd = hwnd;
+  return value;
 }
 
 function createHarness(overrides = {}) {
@@ -21,7 +24,7 @@ function createHarness(overrides = {}) {
   const controller = new PetController({
     obstacleIndex,
     animationBridge,
-    body: { x: 0, y: 0, width: 20, height: 30, vx: 0, vy: 0 },
+    body: overrides.body || { x: 0, y: 0, width: 20, height: 30, vx: 0, vy: 0 },
     renderWindow: {
       setBounds(bounds) { renderBounds.push(bounds); }
     },
@@ -33,7 +36,10 @@ function createHarness(overrides = {}) {
     choosePose: overrides.choosePose || (choices => choices[0]),
     poseAnchors: overrides.poseAnchors,
     gravity: overrides.gravity ?? 1000,
-    releaseThreshold: 12
+    releaseThreshold: 12,
+    autoClimbThresholdMs: overrides.autoClimbThresholdMs,
+    autoClimbSpeed: overrides.autoClimbSpeed,
+    autoClimbAnchorTolerance: overrides.autoClimbAnchorTolerance
   });
   return { animationBridge, controller, hitEvents, obstacleIndex, played, renderBounds };
 }
@@ -444,7 +450,9 @@ test("autonomous crawl starts, moves inside the work area, blocks on obstacles, 
   assert.equal(harness.controller.setCrawlDirection("right"), true);
   assert.equal(harness.played.at(-1).options.facing, "right");
   assert.equal(harness.controller.setCrawlDirection("up"), false);
-  assert.deepEqual(harness.controller.moveCrawl(10, 5, workArea), { moved: true, blocked: false });
+  const freeStep = harness.controller.moveCrawl(10, 5, workArea);
+  assert.deepEqual(freeStep,
+    { body: { x: 10, y: 5, width: 20, height: 30 }, moved: true, fullyMoved: true, blockedAxes: [], climbCandidate: null });
   assert.deepEqual(harness.controller.snapshot().body, {
     x: 10, y: 5, width: 20, height: 30, vx: 0, vy: 0
   });
@@ -452,28 +460,234 @@ test("autonomous crawl starts, moves inside the work area, blocks on obstacles, 
   harness.obstacleIndex.replace("windows", [
     obstacle("window:block", { x: 35, y: 0, width: 20, height: 100 })
   ]);
-  assert.deepEqual(harness.controller.moveCrawl(10, 0, workArea), { moved: false, blocked: true });
+  const blockedStep = harness.controller.moveCrawl(10, 0, workArea);
+  assert.equal(blockedStep.moved, false);
+  assert.equal(blockedStep.fullyMoved, false);
+  assert.deepEqual(blockedStep.blockedAxes, ["x"]);
+  assert.equal(blockedStep.climbCandidate, null);
   assert.equal(harness.controller.snapshot().body.x, 10);
 
   harness.obstacleIndex.replace("windows", [
     obstacle("window:under-pet", { x: 0, y: 0, width: 30, height: 100 })
   ]);
-  assert.deepEqual(harness.controller.moveCrawl(5, 0, workArea), { moved: true, blocked: false });
+  const escapingStep = harness.controller.moveCrawl(5, 0, workArea);
+  assert.equal(escapingStep.moved, true);
+  assert.equal(escapingStep.fullyMoved, true);
   assert.equal(harness.controller.snapshot().body.x, 15);
 
   harness.obstacleIndex.replace("windows", [
     obstacle("window:covers-pet", { x: 0, y: 0, width: 80, height: 100 })
   ]);
   for (let step = 0; step < 13; step += 1) {
-    assert.deepEqual(harness.controller.moveCrawl(5, 0, workArea), { moved: true, blocked: false });
+    assert.equal(harness.controller.moveCrawl(5, 0, workArea).moved, true);
   }
   assert.equal(harness.controller.snapshot().body.x, 80);
 
   harness.obstacleIndex.replace("windows", []);
-  assert.deepEqual(harness.controller.moveCrawl(-100, 0, workArea), { moved: true, blocked: true });
+  const clampedStep = harness.controller.moveCrawl(-100, 0, workArea);
+  assert.equal(clampedStep.moved, true);
+  assert.equal(clampedStep.fullyMoved, false);
+  assert.deepEqual(clampedStep.blockedAxes, ["x"]);
   assert.equal(harness.controller.snapshot().body.x, 0);
   assert.equal(harness.controller.stopCrawl(), true);
   assert.equal(harness.controller.snapshot().state.mode, "idle");
   assert.equal(harness.played.at(-1).action, "idle");
   assert.equal(harness.controller.startCrawl("up"), false);
+});
+
+test("does not auto attach before persistent horizontal blocking reaches threshold", () => {
+  const harness = createHarness({ autoClimbThresholdMs: 100 });
+  const workArea = { x: 0, y: 0, width: 200, height: 200 };
+  harness.controller.startCrawl("right");
+  harness.obstacleIndex.replace("windows", [
+    obstacle("window:wall", { x: 25, y: 0, width: 10, height: 100 })
+  ]);
+
+  assert.equal(harness.controller.moveCrawl(10, 0, workArea, { dtMs: 40, nowMs: 40 }).climbCandidate, null);
+  assert.equal(harness.controller.moveCrawl(10, 0, workArea, { dtMs: 40, nowMs: 80 }).climbCandidate, null);
+  const triggered = harness.controller.moveCrawl(10, 0, workArea, { dtMs: 20, nowMs: 100 });
+  assert.ok(triggered.climbCandidate);
+  assert.equal(triggered.climbCandidate.edge, "left");
+  assert.equal(harness.played.some(entry => entry.action === "wall-climb"), false);
+});
+
+test("revalidates auto climb candidate before any observable change", () => {
+  const target = obstacle("window:climb", { x: 100, y: 50, width: 40, height: 200 }, "window", 77);
+  const valid = { target, edge: "left", t: 0.575 };
+
+  const idle = createHarness();
+  assert.equal(idle.controller.beginAutoClimb(valid), false);
+  assert.equal(idle.controller.snapshot().state.mode, "idle");
+
+  const harness = createHarness();
+  harness.controller.startCrawl("right");
+  harness.obstacleIndex.replace("windows", [target]);
+  const before = harness.controller.snapshot();
+
+  const rejected = [
+    { target: obstacle("taskbar:main", { x: 0, y: 0, width: 100, height: 10 }, "taskbar", 1), edge: "left", t: 0.5 },
+    { target, edge: "top", t: 0.5 },
+    { target, edge: "left", t: Number.NaN },
+    { target, edge: "left", t: 1.5 },
+    { target: obstacle("window:gone", { x: 100, y: 50, width: 40, height: 200 }, "window", 77), edge: "left", t: 0.5 },
+    { target: obstacle("window:climb", { x: 100, y: 50, width: 40, height: 200 }, "window", 78), edge: "left", t: 0.5 }
+  ];
+  for (const candidate of rejected) {
+    assert.equal(harness.controller.beginAutoClimb(candidate), false);
+  }
+  assert.equal(harness.controller.snapshot().state, before.state);
+  assert.deepEqual(harness.controller.snapshot().body, before.body);
+  assert.equal(harness.controller.snapshot().attachment, before.attachment);
+  assert.equal(harness.played.length, 1);
+});
+
+test("creates one wall-climb attachment from a valid current window candidate", () => {
+  const harness = createHarness({
+    poseAnchors: { "wall-climb": { x: 25, y: 15 } },
+    autoClimbAnchorTolerance: 64,
+    body: { x: 80, y: 150, width: 20, height: 30, vx: 0, vy: 0 }
+  });
+  const target = obstacle("window:climb", { x: 100, y: 50, width: 40, height: 200 }, "window", 77);
+  harness.obstacleIndex.replace("windows", [target]);
+  harness.controller.startCrawl("right");
+
+  assert.equal(harness.controller.beginAutoClimb({ target, edge: "left", t: 0.575 }), true);
+  const snapshot = harness.controller.snapshot();
+  assert.equal(snapshot.state.mode, "attached");
+  assert.deepEqual(snapshot.attachment.target, { id: "window:climb", source: "window", hwnd: 77 });
+  assert.equal(snapshot.attachment.edge, "left");
+  assert.equal(snapshot.attachment.pose, "wall-climb");
+  assert.equal(snapshot.attachment.t, 0.575);
+  const climbs = harness.played.filter(entry => entry.action === "wall-climb");
+  assert.equal(climbs.length, 1);
+  assert.equal(climbs[0].options.facing, "right");
+  assert.equal(harness.controller.isAutoClimbing(), true);
+
+  const first = harness.controller.advanceAutoClimb(1000, { x: 0, y: 0, width: 400, height: 400 });
+  assert.equal(first.stalled, false);
+  assert.equal(first.moved, true);
+  const movedDistance = Math.hypot(
+    harness.controller.snapshot().body.x - 80,
+    harness.controller.snapshot().body.y - 150
+  );
+  assert.ok(movedDistance <= 60 + 64, `first step ${movedDistance} exceeds anchor tolerance`);
+  assert.equal(intersects(harness.controller.snapshot().body, target.rect), false);
+});
+
+test("refuses the first climb step when the target window jumps far between ticks", () => {
+  const harness = createHarness({
+    poseAnchors: { "wall-climb": { x: 25, y: 15 } },
+    autoClimbAnchorTolerance: 64,
+    body: { x: 80, y: 150, width: 20, height: 30, vx: 0, vy: 0 }
+  });
+  const target = obstacle("window:climb", { x: 100, y: 50, width: 40, height: 200 }, "window", 77);
+  harness.obstacleIndex.replace("windows", [target]);
+  harness.controller.startCrawl("right");
+  assert.equal(harness.controller.beginAutoClimb({ target, edge: "left", t: 0.575 }), true);
+
+  harness.obstacleIndex.replace("windows", [
+    obstacle("window:climb", { x: 600, y: 500, width: 40, height: 200 }, "window", 77)
+  ]);
+  const first = harness.controller.advanceAutoClimb(16, { x: 0, y: 0, width: 1000, height: 1000 });
+  assert.equal(first.stalled, true);
+  assert.equal(first.moved, false);
+  assert.deepEqual(harness.controller.snapshot().body,
+    { x: 80, y: 150, width: 20, height: 30, vx: 0, vy: 0 });
+});
+
+test("rolls back state and animation when wall-climb playback fails", () => {
+  let failClimb = false;
+  const played = [];
+  const harness = createHarness({
+    body: { x: 80, y: 150, width: 20, height: 30, vx: 0, vy: 0 },
+    animationBridge: {
+      play(action, options) {
+        if (action === "wall-climb" && failClimb) return false;
+        played.push({ action, options });
+        return true;
+      }
+    }
+  });
+  const target = obstacle("window:climb", { x: 100, y: 50, width: 40, height: 200 }, "window", 77);
+  harness.obstacleIndex.replace("windows", [target]);
+  harness.controller.startCrawl("right");
+  failClimb = true;
+
+  assert.equal(harness.controller.beginAutoClimb({ target, edge: "left", t: 0.575 }), false);
+  assert.equal(harness.controller.snapshot().state.mode, "crawling");
+  assert.equal(harness.controller.snapshot().attachment, null);
+  assert.deepEqual(harness.controller.snapshot().body,
+    { x: 80, y: 150, width: 20, height: 30, vx: 0, vy: 0 });
+  assert.equal(harness.controller.isAutoClimbing(), false);
+  assert.equal(played.some(entry => entry.action === "wall-climb"), false);
+});
+
+test("covered escape refuses to push into another obstacle on the way out", () => {
+  const harness = createHarness();
+  const workArea = { x: 0, y: 0, width: 300, height: 300 };
+  harness.controller.startCrawl("right");
+  // 人物被窗口 A 完全覆盖；窗口 B 横在右侧逃离路径上。
+  harness.obstacleIndex.replace("windows", [
+    obstacle("window:cover", { x: 0, y: 0, width: 80, height: 100 }),
+    obstacle("window:barrier", { x: 35, y: 0, width: 30, height: 100 })
+  ]);
+  harness.controller.moveCrawl(30, 0, workArea);
+  assert.equal(harness.controller.snapshot().body.x, 0);
+  harness.controller.moveCrawl(10, 0, workArea);
+  assert.equal(harness.controller.snapshot().body.x, 10);
+  harness.controller.moveCrawl(50, 0, workArea);
+  assert.ok(harness.controller.snapshot().body.x <= 30, `body.x ${harness.controller.snapshot().body.x} pushed through barrier`);
+});
+
+test("advances automatic climbing with bounded monotonic edge progress", () => {
+  const harness = createHarness({
+    poseAnchors: { "wall-climb": { x: 25, y: 15 } },
+    body: { x: 80, y: 150, width: 20, height: 30, vx: 0, vy: 0 }
+  });
+  const target = obstacle("window:climb", { x: 100, y: 50, width: 40, height: 200 }, "window", 77);
+  harness.obstacleIndex.replace("windows", [target]);
+  harness.controller.startCrawl("right");
+  assert.equal(harness.controller.beginAutoClimb({ target, edge: "left", t: 0.575 }), true);
+  const workArea = { x: 0, y: 0, width: 400, height: 400 };
+
+  let lastT = 0.575;
+  for (let step = 0; step < 30; step += 1) {
+    const before = harness.controller.snapshot().body;
+    const result = harness.controller.advanceAutoClimb(16, workArea);
+    assert.equal(result.stalled, false);
+    const t = harness.controller.snapshot().attachment.t;
+    assert.ok(t >= lastT, `t ${t} went backwards from ${lastT}`);
+    lastT = t;
+    const after = harness.controller.snapshot().body;
+    const movedDistance = Math.hypot(after.x - before.x, after.y - before.y);
+    const limit = step === 0 ? 60 * 0.016 + 24 : 60 * 0.016 + 0.001;
+    assert.ok(movedDistance <= limit, `step ${movedDistance} exceeds climb speed`);
+    assert.equal(intersects(after, target.rect), false);
+  }
+});
+
+test("clears automatic route bookkeeping without changing manual attachment lifecycle", () => {
+  const harness = createHarness({ body: { x: 80, y: 150, width: 20, height: 30, vx: 0, vy: 0 } });
+  const target = obstacle("window:climb", { x: 100, y: 50, width: 40, height: 200 }, "window", 77);
+  harness.obstacleIndex.replace("windows", [target]);
+  harness.controller.startCrawl("right");
+  assert.equal(harness.controller.beginAutoClimb({ target, edge: "left", t: 0.575 }), true);
+  assert.equal(harness.controller.isAutoClimbing(), true);
+
+  harness.obstacleIndex.replace("windows", []);
+  harness.controller.syncObstacles();
+  assert.equal(harness.controller.snapshot().state.mode, "falling");
+  assert.equal(harness.controller.isAutoClimbing(), false);
+
+  const manual = createHarness();
+  const manualTarget = obstacle("window:manual", { x: 100, y: 100, width: 400, height: 300 });
+  manual.obstacleIndex.replace("windows", [manualTarget]);
+  manual.controller.handleInput("drag-start", { x: 0, y: 0 });
+  manual.controller.handleInput("drag-move", { x: 200, y: 101 });
+  manual.controller.handleInput("drag-end", { x: 200, y: 101 });
+  assert.equal(manual.controller.snapshot().state.mode, "attached");
+  assert.equal(manual.controller.isAutoClimbing(), false);
+  manual.obstacleIndex.replace("windows", []);
+  manual.controller.syncObstacles();
+  assert.equal(manual.controller.snapshot().state.mode, "falling");
 });
