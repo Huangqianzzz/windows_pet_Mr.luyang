@@ -206,8 +206,8 @@ function resolveCrawlStep({ body, dx, dy, workArea, obstacles }) {
   const verticalClear = dy !== 0 && isStepClear(body, 0, limited.dy, obstacles);
   const ordered = Math.abs(dx) >= Math.abs(dy) ? ["x", "y"] : ["y", "x"];
   const chosen = ordered.find(axis => axis === "x" ? horizontalClear : verticalClear) || null;
-  const contactCandidate = dx !== 0 && !horizontalClear
-    ? firstHorizontalWindowContact(body, limited.dx || dx, obstacles)
+  const contactCandidate = dx !== 0 && !horizontalClear && limited.dx !== 0
+    ? firstHorizontalWindowContact(body, limited.dx, obstacles)
     : null;
 
   if (!chosen) return resolution(body, false, false, requested, contactCandidate);

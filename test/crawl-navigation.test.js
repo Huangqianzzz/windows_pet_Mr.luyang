@@ -188,6 +188,20 @@ test("does not promote a distant window when taskbar or desktop icon is the firs
   }
 });
 
+test("never proposes a climb candidate outside the work area when pinned against its edge", () => {
+  const body = rect(190, 10);
+  const result = resolveCrawlStep({
+    body, dx: 10, dy: 0, workArea,
+    obstacles: [
+      obstacle("window:overlap", "window", rect(192, 0, 50, 50), 81),
+      obstacle("window:outside", "window", rect(205, 0, 30, 100), 82)
+    ]
+  });
+
+  assert.equal(result.contactCandidate, null);
+  assert.equal(result.moved, false);
+});
+
 test("rejects an initially overlapping path that would exit and cross the expanded obstacle", () => {
   const target = obstacle("window:target", "window", rect(0, 0, 100, 100), 72);
   const body = rect(-9, -9);
