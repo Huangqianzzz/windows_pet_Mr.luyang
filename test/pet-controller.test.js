@@ -39,7 +39,10 @@ function createHarness(overrides = {}) {
     releaseThreshold: 12,
     autoClimbThresholdMs: overrides.autoClimbThresholdMs,
     autoClimbSpeed: overrides.autoClimbSpeed,
-    autoClimbAnchorTolerance: overrides.autoClimbAnchorTolerance
+    autoClimbAnchorTolerance: overrides.autoClimbAnchorTolerance,
+    layerCoordinator: overrides.layerCoordinator,
+    hideBubble: overrides.hideBubble,
+    isBackgroundPaused: overrides.isBackgroundPaused
   });
   return { animationBridge, controller, hitEvents, obstacleIndex, played, renderBounds };
 }
@@ -50,6 +53,192 @@ function attachToTop(harness, target) {
   harness.controller.handleInput("drag-move", { x: 200, y: 101 });
   return harness.controller.handleInput("drag-end", { x: 200, y: 101 });
 }
+
+function escapeHarness({ placement = true, restore = true } = {}) {
+  const layers = [];
+  let paused = false;
+  let hiddenBubbles = 0;
+  const harness = createHarness({
+    body: { x: 130, y: 130, width: 20, height: 30, vx: 4, vy: 9 },
+    layerCoordinator: {
+      apply(value) { layers.push({ ...value, mode: harness.controller.snapshot().state.mode }); return placement; },
+      restoreNormal() { layers.push({ normal: true, mode: harness.controller.snapshot().state.mode }); return restore; }
+    },
+    hideBubble() { hiddenBubbles++; },
+    isBackgroundPaused: () => paused
+  });
+  const target = obstacle("window:escape", { x: 100, y: 100, width: 200, height: 200 }, "window", 77);
+  harness.obstacleIndex.replace("windows", [target]);
+  harness.controller.startCrawl();
+  harness.controller.setFrameHitBox({ x: 0, y: 0, width: 10, height: 10 });
+  return { ...harness, target, layers, setPaused(value) { paused = value; }, bubbles: () => hiddenBubbles };
+}
+
+test("input blocking reasons compose and legacy compatibility does not clear background", () => {
+  const { controller, hitEvents } = createHarness();
+  assert.equal(typeof controller.setInputBlocked, "function");
+  controller.setFrameHitBox({ x: 0, y: 0, width: 10, height: 10 });
+  controller.setInputBlocked("background", true);
+  controller.setInputBlocked("behind-window", true);
+  controller.setInputEnabled(false);
+  controller.setInputEnabled(true);
+  controller.setInputBlocked("behind-window", false);
+  assert.equal(hitEvents.filter(event => event.type === "show").length, 1);
+  assert.deepEqual(controller.handleInput("drag-start", { x: 0, y: 0 }), { accepted: false });
+  controller.setInputBlocked("background", false);
+  assert.equal(hitEvents.filter(event => event.type === "show").length, 2);
+  assert.equal(controller.setInputBlocked("", true), false);
+  assert.equal(controller.setInputBlocked("background", 1), false);
+});
+
+test("does not begin an escape if layer placement fails", () => {
+  const h = escapeHarness({ placement: false });
+  assert.equal(typeof h.controller.beginBehindWindowEscape, "function");
+  const before = h.controller.snapshot();
+  const played = h.played.length;
+  assert.equal(h.controller.beginBehindWindowEscape(h.controller.planBehindWindowEscape(h.target)), false);
+  assert.deepEqual(h.controller.snapshot(), before);
+  assert.equal(h.controller.behindEscape, null);
+  assert.equal(h.controller.inputEnabled, true);
+  assert.equal(h.played.length, played);
+  assert.ok(h.layers.some(event => event.normal));
+});
+
+test("enters behind target only after valid plan and hides hit/bubble once", () => {
+  const h = escapeHarness();
+  assert.equal(typeof h.controller.planBehindWindowEscape, "function");
+  const plan = h.controller.planBehindWindowEscape(h.target);
+  for (const invalid of [null, { ...plan, points: [] }, { ...plan, points: [{ x: 0, y: 0 }, ...plan.points] },
+    { ...plan, target: { ...h.target, hwnd: undefined } }, { ...plan, speed: Infinity }]) {
+    assert.equal(h.controller.beginBehindWindowEscape(invalid), false);
+  }
+  assert.equal(h.layers.length, 0);
+  assert.equal(h.bubbles(), 0);
+  assert.equal(h.controller.beginBehindWindowEscape(plan), true);
+  assert.equal(h.layers[0].mode, "crawling");
+  assert.equal(h.controller.snapshot().state.mode, "behind-window");
+  assert.equal(h.bubbles(), 1);
+  assert.equal(h.hitEvents.filter(event => event.type === "hide").length, 1);
+  assert.equal(h.controller.beginBehindWindowEscape(plan), false);
+  assert.equal(h.controller.rest(), false);
+  assert.equal(h.controller.beginSpeech(), false);
+  h.controller.setFrameHitBox({ x: 0, y: 0, width: 10, height: 10 });
+  assert.equal(h.hitEvents.filter(event => event.type === "show").length, 1);
+});
+
+test("advances every behind escape point with finite bounded increments then falls", () => {
+  const h = escapeHarness();
+  assert.equal(typeof h.controller.advanceBehindWindowEscape, "function");
+  const plan = h.controller.planBehindWindowEscape(h.target);
+  assert.equal(h.controller.beginBehindWindowEscape({ ...plan, speed: 0.1 }), true);
+  let result;
+  for (let i = 0; i < 200; i++) {
+    const before = h.controller.snapshot().body;
+    result = h.controller.advanceBehindWindowEscape(16);
+    const after = h.controller.snapshot().body;
+    assert.ok(Math.hypot(after.x - before.x, after.y - before.y) <= 1.600001);
+    assert.ok([after.x, after.y].every(Number.isFinite));
+    if (result.completed) break;
+  }
+  assert.equal(result.completed, true);
+  assert.deepEqual({ x: h.controller.body.x, y: h.controller.body.y }, plan.points.at(-1));
+  assert.equal(h.layers.at(-1).mode, "behind-window");
+  assert.equal(h.controller.snapshot().state.mode, "falling");
+  assert.equal(h.controller.snapshot().attachment, null);
+  assert.equal(h.controller.behindEscape, null);
+  assert.equal(h.controller.body.vx, 0);
+  assert.equal(h.controller.body.vy, 0);
+  assert.equal(h.hitEvents.filter(event => event.type === "show").length, 1);
+  assert.equal(h.bubbles(), 1);
+  assert.equal(h.played.at(-1).action, "fall");
+});
+
+test("handles close minimize hwnd reuse and meaningful target move from the current point", () => {
+  for (const change of ["close", "minimize", "id", "hwnd", "uncover", "covered"]) {
+    const h = escapeHarness();
+    assert.equal(typeof h.controller.planBehindWindowEscape, "function");
+    h.controller.beginBehindWindowEscape(h.controller.planBehindWindowEscape(h.target));
+    h.controller.advanceBehindWindowEscape(16);
+    const before = h.controller.snapshot().body;
+    const moved = { ...h.target, rect: { ...h.target.rect, x: change === "uncover" ? 600 : 101 } };
+    if (change === "id") moved.id = "window:reused";
+    if (change === "hwnd") moved.hwnd = 78;
+    h.obstacleIndex.replace("windows", ["close", "minimize"].includes(change) ? [] : [moved]);
+    const result = h.controller.advanceBehindWindowEscape(0);
+    assert.deepEqual(h.controller.snapshot().body, change === "covered" ? before : { ...before, vx: 0, vy: 0 });
+    if (change === "covered") {
+      assert.equal(result.targetInvalid, false);
+      assert.deepEqual(h.controller.behindEscape.points[0], { x: before.x, y: before.y });
+      assert.equal(h.controller.snapshot().state.mode, "behind-window");
+    } else {
+      assert.equal(result.targetInvalid, true);
+      assert.equal(h.controller.snapshot().state.mode, "falling");
+      assert.equal(h.layers.at(-1).normal, true);
+      assert.equal(h.layers.at(-1).mode, "behind-window");
+    }
+  }
+});
+
+test("background pauses an active escape and restores it below target", () => {
+  for (const invalid of [false, true]) {
+    const h = escapeHarness();
+    assert.equal(typeof h.controller.reapplyLayer, "function");
+    h.controller.beginBehindWindowEscape(h.controller.planBehindWindowEscape(h.target));
+    h.controller.setInputBlocked("background", true);
+    h.setPaused(true);
+    const before = h.controller.snapshot();
+    if (invalid) h.obstacleIndex.replace("windows", []);
+    h.controller.syncObstacles();
+    h.controller.advanceBehindWindowEscape(1000);
+    assert.deepEqual(h.controller.snapshot(), before);
+    assert.equal(h.controller.reapplyLayer(false), true);
+    assert.equal(h.controller.state.mode, invalid ? "falling" : "behind-window");
+    if (!invalid) assert.equal(h.layers.at(-1).behindTarget.hwnd, 77);
+    h.setPaused(false);
+    h.controller.setInputBlocked("background", false);
+    assert.equal(h.hitEvents.filter(event => event.type === "show").length, 1);
+  }
+});
+
+test("failed layer restoration still terminates escape in falling mode", () => {
+  const h = escapeHarness({ restore: false });
+  assert.equal(typeof h.controller.planBehindWindowEscape, "function");
+  h.controller.beginBehindWindowEscape(h.controller.planBehindWindowEscape(h.target));
+  h.obstacleIndex.replace("windows", []);
+  h.controller.syncObstacles();
+  assert.equal(h.controller.state.mode, "falling");
+  assert.equal(h.controller.behindEscape, null);
+  assert.equal(h.controller.inputEnabled, true);
+});
+
+test("a multi-segment escape visits its turn and spends one shared distance budget", () => {
+  const h = escapeHarness();
+  h.controller.body = { ...h.controller.body, x: 90, y: 90 };
+  const plan = h.controller.planBehindWindowEscape(h.target);
+  assert.deepEqual(plan.points, [{ x: 90, y: 90 }, { x: 90, y: 100 }, { x: 79, y: 100 }]);
+  assert.equal(h.controller.beginBehindWindowEscape({ ...plan, speed: 0.1 }), true);
+  assert.equal(h.controller.advanceBehindWindowEscape(150).completed, false);
+  assert.deepEqual(h.renderBounds.slice(-2).map(({ x, y }) => ({ x, y })),
+    [{ x: 90, y: 100 }, { x: 85, y: 100 }]);
+  assert.equal(h.controller.advanceBehindWindowEscape(60).completed, true);
+  assert.deepEqual({ x: h.controller.body.x, y: h.controller.body.y }, plan.points.at(-1));
+});
+
+test("manual attachments reject behind escape and missing hwnd cannot produce a plan", () => {
+  const h = escapeHarness();
+  const plan = h.controller.planBehindWindowEscape(h.target);
+  h.controller.stopCrawl();
+  h.controller.handleInput("drag-start", { x: 130, y: 130 });
+  h.controller.handleInput("drag-end", { x: 200, y: 101 });
+  assert.equal(h.controller.state.mode, "attached");
+  assert.equal(h.controller.isAutoClimbing(), false);
+  assert.equal(h.controller.beginBehindWindowEscape(plan), false);
+  assert.equal(h.layers.length, 0);
+  assert.equal(h.controller.planBehindWindowEscape({ ...h.target, hwnd: undefined }), null);
+  const { hwnd, ...withoutHwnd } = h.target;
+  h.obstacleIndex.replace("windows", [withoutHwnd]);
+  assert.equal(h.controller.planBehindWindowEscape(withoutHwnd), null);
+});
 
 test("drag release attaches with an injected pose and follows target move and resize", () => {
   const harness = createHarness({ choosePose: choices => choices[0] });

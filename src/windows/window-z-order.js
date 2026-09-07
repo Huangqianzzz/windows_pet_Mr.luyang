@@ -18,6 +18,18 @@ function normalizeHwnd(hwnd) {
 
 function createWindowZOrder({ native = createNativeZOrderBindings() } = {}) {
   return Object.freeze({
+    placeBelow(hwnd, targetHwnd) {
+      const pet = normalizeHwnd(hwnd);
+      const target = normalizeHwnd(targetHwnd);
+      if (pet <= 0n || target <= 0n || pet === target) return false;
+      try {
+        if (!native.isWindow(pet) || !native.isWindow(target)
+          || native.isTopmost(target) !== false) return false;
+        return Boolean(native.setWindowPos(pet, target, 0, 0, 0, 0, BOTTOM_FLAGS));
+      } catch {
+        return false;
+      }
+    },
     sendToBottom(hwnd) {
       const normalized = normalizeHwnd(hwnd);
       if (normalized <= 0n) return false;
@@ -45,7 +57,23 @@ function createNativeZOrderBindings() {
   const SetWindowPos = user32.func(
     "int32_t __stdcall SetWindowPos(uintptr_t hwnd, intptr_t insertAfter, int32_t x, int32_t y, int32_t width, int32_t height, uint32_t flags)"
   );
-  return { setWindowPos: SetWindowPos };
+  const IsWindow = user32.func("int32_t __stdcall IsWindow(uintptr_t hwnd)");
+  const GetWindowLong = user32.func(process.arch === "ia32"
+    ? "int32_t __stdcall GetWindowLongW(uintptr_t hwnd, int32_t index)"
+    : "intptr_t __stdcall GetWindowLongPtrW(uintptr_t hwnd, int32_t index)");
+  const kernel32 = koffi.load("kernel32.dll");
+  const SetLastError = kernel32.func("void __stdcall SetLastError(uint32_t error)");
+  const GetLastError = kernel32.func("uint32_t __stdcall GetLastError()");
+  return {
+    setWindowPos: SetWindowPos,
+    isWindow: hwnd => Boolean(IsWindow(hwnd)),
+    isTopmost(hwnd) {
+      SetLastError(0);
+      const style = BigInt(GetWindowLong(hwnd, -20));
+      if (style === 0n && GetLastError() !== 0) return null;
+      return (style & 0x8n) !== 0n;
+    }
+  };
 }
 
 module.exports = { createWindowZOrder };

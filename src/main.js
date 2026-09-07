@@ -43,6 +43,7 @@ const {
   isForegroundBlocking
 } = require("./windows/foreground-window");
 const { createWindowZOrder } = require("./windows/window-z-order");
+const { createPetLayerCoordinator } = require("./runtime/pet-layer-coordinator");
 
 app.disableHardwareAcceleration();
 
@@ -319,11 +320,17 @@ function createRuntime() {
     }
   });
   const initialBounds = petWindow.getBounds();
+  const layerCoordinator = createPetLayerCoordinator({
+    renderWindow: petWindow, hitWindow, bubbleWindow, zOrder: createWindowZOrder()
+  });
   controller = new PetController({
     obstacleIndex,
     animationBridge,
     poseAnchors: poseAnchorsFromManifest(animationBootstrap.manifest, ["sit", "wall-climb", "hang"]),
     body: { ...initialBounds, vx: 0, vy: 0 },
+    layerCoordinator,
+    hideBubble: hideSpeechBubble,
+    isBackgroundPaused: () => runtimePaused,
     renderWindow: liveWindowAdapter(() => petWindow, () => repositionSpeechBubble()),
     hitWindow: liveWindowAdapter(() => hitWindow)
   });
@@ -374,26 +381,17 @@ function createRuntime() {
 
   const foregroundReader = createForegroundWindowReader({ screen });
   const foregroundGate = createForegroundGate({ settleMs: 250 });
-  const windowZOrder = createWindowZOrder();
   backgroundModeTransitions = createBackgroundModeTransitions({
     setRuntimePaused(paused) { runtimePaused = paused; return true; },
-    setInputEnabled(enabled) { return Boolean(controller?.setInputEnabled(enabled)); },
+    setInputEnabled(enabled) { return Boolean(controller?.setInputBlocked("background", !enabled)); },
     hideBubble: hideSpeechBubble,
     dismissSpeech() { void speechFlow?.dismiss().catch(() => {}); return true; },
     sendRendererPaused: sendBackgroundMode,
-    setAlwaysOnTop: setAllAlwaysOnTop,
+    setAlwaysOnTop(enabled) {
+      return enabled ? controller.reapplyLayer(false) : setAllAlwaysOnTop(false);
+    },
     lowerWindows() {
-      const windows = activeWindows();
-      if (windows.length !== 3) return false;
-      let succeeded = true;
-      for (const window of windows) {
-        try {
-          if (!windowZOrder.sendToBottom(window.getNativeWindowHandle())) succeeded = false;
-        } catch {
-          succeeded = false;
-        }
-      }
-      return succeeded;
+      return controller.reapplyLayer(true);
     },
     refreshObstacles: createTransitionCommand(syncControllerObstacles),
     resetTickClock() { previousTick = Date.now(); return true; }

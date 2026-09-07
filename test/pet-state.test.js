@@ -2,6 +2,21 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { canInterrupt, initialState, reducePetState } = require("../src/domain/pet-state");
 
+test("behind-window is an explicit narrow state transition", () => {
+  for (const [mode, automatic] of [["crawling", false], ["attached", true]]) {
+    const behind = reducePetState({ mode }, { type: "ENTER_BEHIND_WINDOW", automatic });
+    assert.equal(behind.mode, "behind-window");
+    assert.equal(reducePetState(behind, { type: "SUPPORT_LOST" }).mode, "falling");
+    for (const type of ["CRAWL", "REST", "SPEAK", "DRAG_START", "ATTACH"]) {
+      assert.equal(reducePetState(behind, { type }), behind);
+    }
+  }
+  for (const mode of ["idle", "attached", "dragging", "speaking", "resting", "falling", "landing", "dueling"]) {
+    const state = { mode };
+    assert.equal(reducePetState(state, { type: "ENTER_BEHIND_WINDOW" }), state);
+  }
+});
+
 test("initialState creates a frozen idle state", () => {
   const state = initialState();
 

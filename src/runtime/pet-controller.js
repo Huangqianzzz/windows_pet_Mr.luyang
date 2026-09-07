@@ -7,7 +7,7 @@ const {
 const { stepFall } = require("../domain/fall");
 const { intersects } = require("../domain/geometry");
 const { initialState, reducePetState } = require("../domain/pet-state");
-const { resolveCrawlStep } = require("./crawl-navigation");
+const { resolveCrawlStep, planBehindWindowEscape } = require("./crawl-navigation");
 
 const AUTO_CLIMB_THRESHOLD_MS = 2000;
 const AUTO_CLIMB_SPEED = 60;
@@ -85,6 +85,9 @@ class PetController {
     body,
     renderWindow,
     hitWindow,
+    layerCoordinator,
+    hideBubble = () => {},
+    isBackgroundPaused = () => false,
     choosePose = choices => choices[0],
     poseAnchors = {},
     gravity,
@@ -124,6 +127,10 @@ class PetController {
     this.currentScale = 1;
     this.renderWindow = renderWindow;
     this.hitWindow = hitWindow;
+    this.layerCoordinator = layerCoordinator;
+    this.hideBubble = hideBubble;
+    this.isBackgroundPaused = isBackgroundPaused;
+    this.behindEscape = null;
     this.choosePose = choosePose;
     this.poseAnchors = Object.freeze(Object.fromEntries(Object.entries(poseAnchors || {}).map(([pose, anchor]) => {
       if (!anchor || ![anchor.x, anchor.y].every(Number.isFinite)) {
@@ -141,7 +148,7 @@ class PetController {
     this.dragOffset = null;
     this.frameHitBox = null;
     this.hitRegionVisible = false;
-    this.inputEnabled = true;
+    this.inputBlocks = new Set();
     this.frameSupportAnchor = null;
     this.restResumeState = null;
     this.speechResumeState = null;
@@ -168,8 +175,18 @@ class PetController {
 
   setInputEnabled(enabled) {
     if (typeof enabled !== "boolean") return false;
-    this.inputEnabled = enabled;
-    if (enabled) this.#showCurrentHitRegion();
+    return this.setInputBlocked("legacy", !enabled);
+  }
+
+  get inputEnabled() {
+    return this.inputBlocks.size === 0;
+  }
+
+  setInputBlocked(reason, blocked) {
+    if (typeof reason !== "string" || !reason.trim() || typeof blocked !== "boolean") return false;
+    if (blocked) this.inputBlocks.add(reason);
+    else this.inputBlocks.delete(reason);
+    if (this.inputEnabled) this.#showCurrentHitRegion();
     else {
       this.#cancelDrag();
       this.#hideHitRegion();
@@ -366,6 +383,105 @@ class PetController {
     return Boolean(this.autoClimb && this.state.mode === "attached");
   }
 
+  planBehindWindowEscape(target) {
+    if (!target || !Number.isSafeInteger(target.hwnd) || target.hwnd <= 0) return null;
+    try {
+      return planBehindWindowEscape({ body: this.body, target,
+        obstacles: this.obstacleIndex.snapshot(), clearance: 1 });
+    } catch {
+      return null;
+    }
+  }
+
+  beginBehindWindowEscape(plan) {
+    if (this.behindEscape || this.isBackgroundPaused() || !this.layerCoordinator || !plan) return false;
+    const next = reducePetState(this.state, { type: "ENTER_BEHIND_WINDOW", automatic: this.isAutoClimbing() });
+    if (next.mode !== "behind-window") return false;
+    const currentPlan = this.planBehindWindowEscape(plan.target);
+    const speed = plan.speed ?? this.autoClimbSpeed / 1000;
+    if (!currentPlan || !Number.isFinite(speed) || speed <= 0
+      || !Array.isArray(plan.points) || plan.points.length !== currentPlan.points.length
+      || !plan.points.every((point, index) => point && point.x === currentPlan.points[index].x
+        && point.y === currentPlan.points[index].y)) return false;
+
+    this.behindEscape = { target: currentPlan.target, lastRect: currentPlan.target.rect,
+      points: currentPlan.points, segmentIndex: 1, speed };
+    try {
+      this.setInputBlocked("behind-window", true);
+      this.hideBubble();
+      if (!this.layerCoordinator.apply({ backgroundPaused: false, behindTarget: currentPlan.target })) {
+        throw new Error("behind layer rejected");
+      }
+      this.state = next;
+      return true;
+    } catch {
+      this.behindEscape = null;
+      try { this.layerCoordinator.restoreNormal(); } catch {}
+      this.setInputBlocked("behind-window", false);
+      return false;
+    }
+  }
+
+  #refreshBehindTarget() {
+    const session = this.behindEscape;
+    if (!session) return false;
+    const current = this.obstacleIndex.snapshot().find(obstacle => sameIdentity(obstacle, session.target));
+    if (!current) return false;
+    if (["x", "y", "width", "height"].some(key => current.rect[key] !== session.lastRect[key])) {
+      if (!intersects(this.body, current.rect)) return false;
+      const plan = this.planBehindWindowEscape(current);
+      if (!plan) return false;
+      session.target = plan.target;
+      session.lastRect = plan.target.rect;
+      session.points = plan.points;
+      session.segmentIndex = 1;
+    }
+    return true;
+  }
+
+  reapplyLayer(backgroundPaused = this.isBackgroundPaused()) {
+    if (!backgroundPaused && this.behindEscape && !this.#refreshBehindTarget()) {
+      this.supportLost();
+      return this.layerCoordinator.restoreNormal();
+    }
+    let applied = false;
+    try {
+      applied = this.layerCoordinator.apply({ backgroundPaused, behindTarget: this.behindEscape?.target });
+    } catch {}
+    if (!applied && !backgroundPaused && this.behindEscape) this.supportLost();
+    return applied;
+  }
+
+  advanceBehindWindowEscape(dtMs) {
+    const idle = { moved: false, completed: false, targetInvalid: false };
+    if (!this.behindEscape || this.isBackgroundPaused()) return idle;
+    if (!Number.isFinite(dtMs) || dtMs < 0) throw new RangeError("dtMs must be non-negative");
+    if (!this.#refreshBehindTarget()) {
+      this.supportLost();
+      return { ...idle, targetInvalid: true };
+    }
+    const session = this.behindEscape;
+    let remaining = session.speed * dtMs;
+    let moved = false;
+    while (session.segmentIndex < session.points.length) {
+      const point = session.points[session.segmentIndex];
+      const dx = point.x - this.body.x;
+      const dy = point.y - this.body.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance === 0) { session.segmentIndex++; continue; }
+      if (remaining <= 0) break;
+      const step = Math.min(remaining, distance);
+      this.#moveBody(step === distance ? point.x : this.body.x + dx / distance * step,
+        step === distance ? point.y : this.body.y + dy / distance * step);
+      moved = true;
+      remaining -= step;
+      if (step === distance) session.segmentIndex++;
+    }
+    const completed = session.segmentIndex === session.points.length;
+    if (completed) this.supportLost();
+    return { moved, completed, targetInvalid: false };
+  }
+
   advanceAutoClimb(dtMs, workArea) {
     const idle = { moved: false, stalled: false, target: null, atEdge: false };
     if (!this.autoClimb || this.state.mode !== "attached") return idle;
@@ -429,6 +545,14 @@ class PetController {
   }
 
   supportLost() {
+    if (this.behindEscape) {
+      this.behindEscape = null;
+      this.attachment = null;
+      this.frameHitBox = null;
+      try { this.layerCoordinator.restoreNormal(); } catch {}
+      this.setInputBlocked("behind-window", false);
+      this.body = { ...this.body, vx: 0, vy: 0 };
+    }
     const previous = this.state;
     this.state = reducePetState(this.state, { type: "SUPPORT_LOST" });
     if (this.state.mode !== "falling") return false;
@@ -443,6 +567,10 @@ class PetController {
   }
 
   syncObstacles() {
+    if (this.behindEscape) {
+      if (this.isBackgroundPaused()) return true;
+      return !this.advanceBehindWindowEscape(0).targetInvalid;
+    }
     if (!this.attachment?.target?.id) return false;
     const target = this.obstacleIndex.snapshot().find(obstacle =>
       obstacle.id === this.attachment.target.id

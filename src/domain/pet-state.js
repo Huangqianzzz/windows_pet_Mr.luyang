@@ -5,6 +5,7 @@ const EVENT_MODES = Object.freeze({
   DRAG_START: "dragging",
   ATTACH: "attached",
   AUTO_ATTACH: "attached",
+  ENTER_BEHIND_WINDOW: "behind-window",
   SUPPORT_LOST: "falling",
   FALL: "falling",
   SPEAK: "speaking",
@@ -34,6 +35,13 @@ function canInterrupt(state, eventType) {
 }
 
 function reducePetState(state, event) {
+  if (event?.type === "ENTER_BEHIND_WINDOW") {
+    return state.mode === "crawling" || (state.mode === "attached" && event.automatic === true)
+      ? Object.freeze({ mode: "behind-window" }) : state;
+  }
+  if (state.mode === "behind-window") {
+    return event?.type === "SUPPORT_LOST" ? Object.freeze({ mode: "falling" }) : state;
+  }
   if (event?.type === "AUTO_ATTACH") {
     return state.mode === "crawling" ? Object.freeze({ mode: "attached" }) : state;
   }

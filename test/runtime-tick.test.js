@@ -7,6 +7,42 @@ const { runRuntimeTick } = require("../src/runtime/runtime-tick");
 const body = { x: 10, y: 20, width: 30, height: 40, vx: 0, vy: 0 };
 const workArea = { x: 0, y: 0, width: 1920, height: 1040 };
 
+test("runtime tick routes automatic-climb stall to a valid behind plan exactly once", () => {
+  for (const outcome of [{ stalled: true }, { atEdge: true }]) {
+    const calls = [];
+    let mode = "attached";
+    const target = { id: "window:1", source: "window", hwnd: 77 };
+    const plan = { target, points: [{ x: 10, y: 20 }, { x: 0, y: 20 }] };
+    const controller = {
+      tick() {}, snapshot: () => ({ state: { mode }, body }), isAutoClimbing: () => true,
+      advanceAutoClimb: () => ({ ...outcome, target }),
+      planBehindWindowEscape(value) { calls.push(["plan", value]); return plan; },
+      beginBehindWindowEscape(value) { calls.push(["begin", value]); mode = "behind-window"; return true; },
+      advanceBehindWindowEscape(dtMs) { calls.push(["escape", dtMs]); }
+    };
+    const args = { controller, roam: { tick() { throw new Error("roam competed"); } },
+      settings: { autonomousActivity: true }, screen: { getDisplayMatching: () => ({ workArea }) }, dtMs: 16, nowMs: 0 };
+    runRuntimeTick(args);
+    runRuntimeTick(args);
+    assert.deepEqual(calls, [["plan", target], ["begin", plan], ["escape", 16]]);
+  }
+});
+
+test("runtime tick falls once when automatic climb loses target or cannot escape", () => {
+  for (const target of [null, { source: "window", id: "window:1" }]) {
+    let mode = "attached";
+    let losses = 0;
+    const controller = { tick() {}, snapshot: () => ({ state: { mode }, body }), isAutoClimbing: () => true,
+      advanceAutoClimb: () => ({ stalled: true, target }), planBehindWindowEscape: () => null,
+      supportLost() { losses++; mode = "falling"; } };
+    const args = { controller, roam: { tick: () => ({ kind: "none" }) }, settings: {},
+      screen: { getDisplayMatching: () => ({ workArea }) }, dtMs: 16, nowMs: 0 };
+    runRuntimeTick(args);
+    runRuntimeTick(args);
+    assert.equal(losses, 1);
+  }
+});
+
 test("runtime tick gives the same nowMs to blocked and applies one changed facing", () => {
   const calls = [];
   const controller = {
