@@ -24,6 +24,7 @@ function createWindowZOrder({ native = createNativeZOrderBindings() } = {}) {
       if (pet <= 0n || target <= 0n || pet === target) return false;
       try {
         if (!native.isWindow(pet) || !native.isWindow(target)
+          || native.isWindowVisible(target) !== true || native.isIconic(target) !== false
           || native.isTopmost(target) !== false) return false;
         return Boolean(native.setWindowPos(pet, target, 0, 0, 0, 0, BOTTOM_FLAGS));
       } catch {
@@ -58,6 +59,8 @@ function createNativeZOrderBindings() {
     "int32_t __stdcall SetWindowPos(uintptr_t hwnd, intptr_t insertAfter, int32_t x, int32_t y, int32_t width, int32_t height, uint32_t flags)"
   );
   const IsWindow = user32.func("int32_t __stdcall IsWindow(uintptr_t hwnd)");
+  const IsWindowVisible = user32.func("int32_t __stdcall IsWindowVisible(uintptr_t hwnd)");
+  const IsIconic = user32.func("int32_t __stdcall IsIconic(uintptr_t hwnd)");
   const GetWindowLong = user32.func(process.arch === "ia32"
     ? "int32_t __stdcall GetWindowLongW(uintptr_t hwnd, int32_t index)"
     : "intptr_t __stdcall GetWindowLongPtrW(uintptr_t hwnd, int32_t index)");
@@ -67,6 +70,8 @@ function createNativeZOrderBindings() {
   return {
     setWindowPos: SetWindowPos,
     isWindow: hwnd => Boolean(IsWindow(hwnd)),
+    isWindowVisible: hwnd => Boolean(IsWindowVisible(hwnd)),
+    isIconic: hwnd => Boolean(IsIconic(hwnd)),
     isTopmost(hwnd) {
       SetLastError(0);
       const style = BigInt(GetWindowLong(hwnd, -20));

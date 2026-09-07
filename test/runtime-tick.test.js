@@ -205,5 +205,25 @@ test("main runtime owns one autonomous scheduler and supplies its monotonic tick
   assert.match(main, /poseAnchorsFromManifest/);
   assert.match(main, /poseAnchors:\s*poseAnchorsFromManifest\(animationBootstrap\.manifest/);
   assert.match(main, /backgroundPaused:\s*runtimePaused/);
-  assert.match(main, /refreshObstacles:\s*createTransitionCommand\(syncControllerObstacles\)/);
+});
+
+test("main background refresh enumerates then replaces obstacles before controller synchronization", () => {
+  const main = fs.readFileSync(path.join(__dirname, "..", "src", "main.js"), "utf8");
+  const start = main.indexOf("refreshObstacles:");
+  const end = main.indexOf("resetTickClock()", start);
+  const calls = [];
+  const obstacles = [];
+  const { createTransitionCommand } = require("../src/runtime/foreground-gate");
+  const { refreshObstacles } = require("node:vm").runInNewContext(`({${main.slice(start, end)}})`, {
+    createTransitionCommand,
+    windowSensor: { refresh() { calls.push("enumerate"); return obstacles; } },
+    obstacleIndex: { replace(provider, snapshot) {
+      assert.equal(provider, "windows");
+      assert.equal(snapshot, obstacles);
+      calls.push("replace");
+    } },
+    syncControllerObstacles() { calls.push("sync"); return false; }
+  });
+  assert.equal(refreshObstacles(), true);
+  assert.deepEqual(calls, ["enumerate", "replace", "sync"]);
 });

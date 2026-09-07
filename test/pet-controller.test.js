@@ -211,6 +211,71 @@ test("failed layer restoration still terminates escape in falling mode", () => {
   assert.equal(h.controller.inputEnabled, true);
 });
 
+test("escape setBounds failure restores the last body and falls without releasing other input blocks", () => {
+  const h = escapeHarness();
+  h.controller.beginBehindWindowEscape(h.controller.planBehindWindowEscape(h.target));
+  h.controller.setInputBlocked("external", true);
+  const before = h.controller.snapshot().body;
+  const moves = [];
+  h.controller.renderWindow.setBounds = bounds => {
+    moves.push(bounds);
+    throw new Error("native setBounds failed");
+  };
+  assert.doesNotThrow(() => h.controller.advanceBehindWindowEscape(16));
+  assert.deepEqual(h.controller.snapshot().body, { ...before, vx: 0, vy: 0 });
+  assert.equal(h.controller.state.mode, "falling");
+  assert.equal(h.controller.behindEscape, null);
+  assert.equal(h.layers.at(-1).normal, true);
+  assert.equal(h.layers.at(-1).mode, "behind-window");
+  assert.equal(h.controller.inputEnabled, false);
+  assert.equal(h.controller.inputBlocks.has("behind-window"), false);
+  assert.equal(h.controller.inputBlocks.has("external"), true);
+  assert.deepEqual(moves.at(-1), { x: before.x, y: before.y, width: before.width, height: before.height });
+  h.controller.setInputBlocked("external", false);
+  assert.equal(h.hitEvents.filter(event => event.type === "show").length, 1);
+  assert.equal(h.bubbles(), 1);
+});
+
+test("escape scale change replans with current dimensions or falls safely when no route remains", () => {
+  for (const [blocked, automatic] of [[false, false], [true, false], [false, true], [true, true]]) {
+    const h = escapeHarness();
+    const other = obstacle("window:neighbor", { x: 155, y: 130, width: 10, height: 80 }, "window", 78);
+    if (blocked) h.obstacleIndex.replace("windows", [h.target, other]);
+    if (automatic) h.controller.beginAutoClimb({ target: h.target, edge: "left", t: 0.5 });
+    h.controller.beginBehindWindowEscape(h.controller.planBehindWindowEscape(h.target));
+    h.controller.advanceBehindWindowEscape(16);
+    const before = h.controller.snapshot().body;
+    assert.equal(h.controller.setScale(2), true);
+    assert.equal(h.renderBounds.at(-1).width, 40);
+    assert.equal(h.renderBounds.at(-1).height, 60);
+    assert.deepEqual({ x: h.controller.body.x, y: h.controller.body.y }, { x: before.x, y: before.y });
+    h.controller.advanceBehindWindowEscape(0);
+    if (blocked) {
+      assert.equal(h.controller.state.mode, "falling");
+      assert.equal(h.controller.behindEscape, null);
+      assert.equal(h.layers.at(-1).normal, true);
+      assert.equal(h.layers.at(-1).mode, "behind-window");
+    } else {
+      assert.deepEqual(h.controller.behindEscape.points[0], { x: before.x, y: before.y });
+      let result;
+      for (let tick = 0; tick < 200; tick++) {
+        const previous = h.controller.snapshot().body;
+        result = h.controller.advanceBehindWindowEscape(16);
+        assert.ok(Math.hypot(h.controller.body.x - previous.x, h.controller.body.y - previous.y) <= 0.960001);
+        if (result.completed) break;
+      }
+      assert.equal(result.completed, true);
+      assert.equal(h.controller.state.mode, "falling");
+      assert.equal(intersects(h.controller.body, h.target.rect), false);
+      assert.equal(intersects(h.controller.body, other.rect), false);
+    }
+    assert.equal(h.controller.body.width, 40);
+    assert.equal(h.controller.body.height, 60);
+    assert.equal(h.hitEvents.filter(event => event.type === "show").length, 1);
+    assert.equal(h.bubbles(), 1);
+  }
+});
+
 test("a multi-segment escape visits its turn and spends one shared distance budget", () => {
   const h = escapeHarness();
   h.controller.body = { ...h.controller.body, x: 90, y: 90 };

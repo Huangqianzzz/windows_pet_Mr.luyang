@@ -393,7 +393,10 @@ function createRuntime() {
     lowerWindows() {
       return controller.reapplyLayer(true);
     },
-    refreshObstacles: createTransitionCommand(syncControllerObstacles),
+    refreshObstacles: createTransitionCommand(() => {
+      obstacleIndex.replace("windows", windowSensor.refresh());
+      syncControllerObstacles();
+    }),
     resetTickClock() { previousTick = Date.now(); return true; }
   });
   backgroundModeCoordinator = createBackgroundModeCoordinator({

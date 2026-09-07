@@ -105,6 +105,48 @@ test("start refreshes on native events and stop detaches the event source", () =
   assert.deepEqual(sensor.snapshot().map(item => item.hwnd), [2]);
 });
 
+test("explicit refresh replaces stale native records before an active escape resumes", () => {
+  const { PetController } = require("../src/runtime/pet-controller");
+  const { ObstacleIndex } = require("../src/runtime/obstacle-index");
+  for (const changed of [{ minimized: true }, { visible: false }, { rect: [600, 600, 800, 800] }]) {
+    const calls = [];
+    const native = fakeWindowNative([windowRecord(77, { rect: [100, 100, 300, 300] })]);
+    const enumerate = native.enumerateWindows;
+    native.enumerateWindows = () => { calls.push("enumerate"); return enumerate(); };
+    const sensor = createWindowSensor({ native, ownProcessId: 99 });
+    const obstacleIndex = new ObstacleIndex();
+    obstacleIndex.replace("windows", sensor.snapshot());
+    let paused = false;
+    const controller = new PetController({ obstacleIndex,
+      animationBridge: { play: () => true },
+      body: { x: 130, y: 130, width: 20, height: 30, vx: 0, vy: 0 },
+      layerCoordinator: {
+        apply() { calls.push("placeBelow"); return true; },
+        restoreNormal() { calls.push("restoreNormal"); return true; }
+      }, isBackgroundPaused: () => paused
+    });
+    controller.startCrawl();
+    controller.beginBehindWindowEscape(controller.planBehindWindowEscape(sensor.snapshot()[0]));
+    paused = true;
+    controller.setInputBlocked("background", true);
+    native.replace([windowRecord(77, { rect: [100, 100, 300, 300], ...changed })]);
+    assert.equal(sensor.snapshot().length, 1);
+    const before = controller.snapshot().body;
+    calls.length = 0;
+    assert.equal(typeof sensor.refresh, "function");
+    obstacleIndex.replace("windows", sensor.refresh());
+    controller.syncObstacles();
+    assert.equal(controller.reapplyLayer(false), true);
+    assert.equal(calls[0], "enumerate");
+    assert.equal(calls.includes("placeBelow"), false);
+    assert.equal(controller.state.mode, "falling");
+    assert.equal(controller.behindEscape, null);
+    assert.deepEqual(controller.body, before);
+    assert.equal(controller.inputEnabled, false);
+    assert.deepEqual(sensor.snapshot(), obstacleIndex.snapshot());
+  }
+});
+
 test("stop preserves a failed native unsubscribe so cleanup can be retried", () => {
   const native = fakeWindowNative([windowRecord(1)]);
   let attempts = 0;

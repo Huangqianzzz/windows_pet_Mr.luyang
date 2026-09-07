@@ -246,7 +246,7 @@ class PetController {
       height: this.baseSize.height * scale
     };
     this.currentScale = scale;
-    if (this.attachment) this.syncObstacles();
+    if (this.attachment && !this.behindEscape) this.syncObstacles();
     else this.#renderBody();
     if (this.frameHitBox && this.state.mode !== "falling") {
       this.#showCurrentHitRegion();
@@ -405,7 +405,8 @@ class PetController {
         && point.y === currentPlan.points[index].y)) return false;
 
     this.behindEscape = { target: currentPlan.target, lastRect: currentPlan.target.rect,
-      points: currentPlan.points, segmentIndex: 1, speed };
+      points: currentPlan.points, segmentIndex: 1, speed,
+      bodySize: { width: this.body.width, height: this.body.height } };
     try {
       this.setInputBlocked("behind-window", true);
       this.hideBubble();
@@ -427,7 +428,8 @@ class PetController {
     if (!session) return false;
     const current = this.obstacleIndex.snapshot().find(obstacle => sameIdentity(obstacle, session.target));
     if (!current) return false;
-    if (["x", "y", "width", "height"].some(key => current.rect[key] !== session.lastRect[key])) {
+    if (["x", "y", "width", "height"].some(key => current.rect[key] !== session.lastRect[key])
+      || this.body.width !== session.bodySize.width || this.body.height !== session.bodySize.height) {
       if (!intersects(this.body, current.rect)) return false;
       const plan = this.planBehindWindowEscape(current);
       if (!plan) return false;
@@ -435,6 +437,7 @@ class PetController {
       session.lastRect = plan.target.rect;
       session.points = plan.points;
       session.segmentIndex = 1;
+      session.bodySize = { width: this.body.width, height: this.body.height };
     }
     return true;
   }
@@ -471,8 +474,16 @@ class PetController {
       if (distance === 0) { session.segmentIndex++; continue; }
       if (remaining <= 0) break;
       const step = Math.min(remaining, distance);
-      this.#moveBody(step === distance ? point.x : this.body.x + dx / distance * step,
-        step === distance ? point.y : this.body.y + dy / distance * step);
+      const previousBody = this.body;
+      try {
+        this.#moveBody(step === distance ? point.x : this.body.x + dx / distance * step,
+          step === distance ? point.y : this.body.y + dy / distance * step);
+      } catch {
+        this.body = previousBody;
+        try { this.#renderBody(); } catch {}
+        this.supportLost();
+        return { ...idle, moved };
+      }
       moved = true;
       remaining -= step;
       if (step === distance) session.segmentIndex++;

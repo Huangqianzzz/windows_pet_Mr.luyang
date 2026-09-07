@@ -133,6 +133,7 @@ function createWindowSensor({
   refresh();
 
   return Object.freeze({
+    refresh,
     start() {
       if (!unsubscribe) {
         unsubscribe = native.subscribe(() => {

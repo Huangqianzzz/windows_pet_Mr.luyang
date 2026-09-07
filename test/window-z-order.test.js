@@ -5,6 +5,7 @@ test("placeBelow inserts the render HWND after the specific target without move 
   const { createWindowZOrder } = require("../src/windows/window-z-order");
   const calls = [];
   const native = { isWindow: () => true, isTopmost: () => false,
+    isWindowVisible: () => true, isIconic: () => false,
     setWindowPos: (...args) => { calls.push(args); return true; } };
   const zOrder = createWindowZOrder({ native });
   assert.equal(typeof zOrder.placeBelow, "function");
@@ -28,6 +29,28 @@ test("placeBelow inserts the render HWND after the specific target without move 
   assert.equal(zOrder.placeBelow(123, 456), false);
   native.setWindowPos = () => { throw new Error("native failure"); };
   assert.equal(zOrder.placeBelow(123, 456), false);
+});
+
+test("placeBelow rejects an invisible or minimized target immediately before placement", () => {
+  const { createWindowZOrder } = require("../src/windows/window-z-order");
+  let placements = 0;
+  let visible = false;
+  let minimized = false;
+  const zOrder = createWindowZOrder({ native: {
+    isWindow: () => true, isTopmost: () => false,
+    isWindowVisible: () => visible, isIconic: () => minimized,
+    setWindowPos() { placements++; return true; }
+  } });
+  assert.equal(zOrder.placeBelow(123, 77), false);
+  visible = true;
+  minimized = true;
+  assert.equal(zOrder.placeBelow(123, 77), false);
+  minimized = undefined;
+  assert.equal(zOrder.placeBelow(123, 77), false);
+  assert.equal(placements, 0);
+  minimized = false;
+  assert.equal(zOrder.placeBelow(123, 77), true);
+  assert.equal(placements, 1);
 });
 
 test("window z-order sends an Electron native handle to HWND_BOTTOM without moving or activating", () => {
