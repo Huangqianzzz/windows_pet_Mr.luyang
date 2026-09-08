@@ -39,17 +39,18 @@ function createWindowSupportCoordinator({
 
   function handleSnapshot(obstacles, meta = {}) {
     if (paused || stopped || !Array.isArray(obstacles)) return false;
-    replaceWindows(obstacles);
     const target = getAttachment()?.target;
     if (!target?.id || target.source !== "window" || obstacles.some(item => sameTarget(item, target))) {
       cancel();
       missing = false;
+      replaceWindows(obstacles);
       syncController();
       return true;
     }
     if (meta.immediate || missing) {
       cancel();
       missing = false;
+      replaceWindows(obstacles);
       syncController();
       return true;
     }

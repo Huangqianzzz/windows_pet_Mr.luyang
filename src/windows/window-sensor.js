@@ -25,6 +25,15 @@ function classifyWindowEvent(event, hwnd, idObject) {
   };
 }
 
+function enumerateNativeWindows(enumWindows, readRecord) {
+  const records = [];
+  const completed = enumWindows(hwnd => {
+    records.push(readRecord(hwnd));
+    return 1;
+  }, 0);
+  return completed ? records : null;
+}
+
 function normalizeRect(rect) {
   if (!Array.isArray(rect) || rect.length !== 4 || !rect.every(Number.isFinite)) {
     return null;
@@ -352,8 +361,7 @@ function createNativeWindowBindings() {
 
   return {
     enumerateWindows() {
-      const records = [];
-      EnumWindows(hwnd => {
+      return enumerateNativeWindows(EnumWindows, hwnd => {
         const processId = [null];
         GetWindowThreadProcessId(hwnd, processId);
 
@@ -368,7 +376,7 @@ function createNativeWindowBindings() {
         const cloakResult = DwmGetWindowDword(hwnd, DWMWA_CLOAKED, cloaked, 4);
         const hwndNumber = Number(koffi.address(hwnd));
 
-        records.push({
+        return {
           hwnd: hwndNumber,
           visible: Boolean(IsWindowVisible(hwnd)),
           cloaked: cloakResult !== 0 || Boolean(cloaked[0]),
@@ -376,10 +384,8 @@ function createNativeWindowBindings() {
           systemWindow: isSystemShellWindow(hwnd),
           processId: Number(processId[0] || 0),
           rect: frameResult === 0 ? convertPhysicalRect(hwnd, frame) : null
-        });
-        return 1;
-      }, 0);
-      return records;
+        };
+      });
     },
     toDipRect(_hwnd, rect) {
       return rect;
@@ -395,4 +401,9 @@ function createNativeWindowBindings() {
   };
 }
 
-module.exports = { classifyWindowEvent, createWinEventSubscriber, createWindowSensor };
+module.exports = {
+  classifyWindowEvent,
+  createWinEventSubscriber,
+  createWindowSensor,
+  enumerateNativeWindows
+};

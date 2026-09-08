@@ -3,7 +3,8 @@ const assert = require("node:assert/strict");
 const {
   createWinEventSubscriber,
   createWindowSensor,
-  classifyWindowEvent
+  classifyWindowEvent,
+  enumerateNativeWindows
 } = require("../src/windows/window-sensor");
 const {
   collectExplorerIconRects,
@@ -54,6 +55,20 @@ test("classifies only and destructive native window events without treating rest
   assert.deepEqual(classifyWindowEvent(0x0017, 7, 0), { event: 0x0017, hwnd: 7, immediate: false });
   assert.deepEqual(classifyWindowEvent(0x800b, 7, 0), { event: 0x800b, hwnd: 7, immediate: false });
   assert.equal(classifyWindowEvent(0x800b, 7, -4), null);
+});
+
+test("native enumeration rejects complete and partial records when EnumWindows reports failure", () => {
+  const complete = enumerateNativeWindows(
+    callback => { callback(7); return 1; },
+    hwnd => ({ hwnd })
+  );
+  const failed = enumerateNativeWindows(
+    callback => { callback(7); return 0; },
+    hwnd => ({ hwnd })
+  );
+
+  assert.deepEqual(complete, [{ hwnd: 7 }]);
+  assert.equal(failed, null);
 });
 
 function fakeClock() {
