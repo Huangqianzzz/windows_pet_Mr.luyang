@@ -2,7 +2,8 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const {
   createWinEventSubscriber,
-  createWindowSensor
+  createWindowSensor,
+  classifyWindowEvent
 } = require("../src/windows/window-sensor");
 const {
   collectExplorerIconRects,
@@ -41,9 +42,38 @@ function fakeWindowNative(initialWindows) {
     replace(nextWindows) {
       windows = nextWindows;
     },
-    emitChange() {
-      listener?.();
+    emitChange(meta) {
+      listener?.(meta);
     }
+  };
+}
+
+test("classifies only and destructive native window events without treating restore as support loss", () => {
+  assert.deepEqual(classifyWindowEvent(0x8001, 7, 0), { event: 0x8001, hwnd: 7, immediate: true });
+  assert.deepEqual(classifyWindowEvent(0x0016, 7, 0), { event: 0x0016, hwnd: 7, immediate: true });
+  assert.deepEqual(classifyWindowEvent(0x0017, 7, 0), { event: 0x0017, hwnd: 7, immediate: false });
+  assert.deepEqual(classifyWindowEvent(0x800b, 7, 0), { event: 0x800b, hwnd: 7, immediate: false });
+  assert.equal(classifyWindowEvent(0x800b, 7, -4), null);
+});
+
+function fakeClock() {
+  let now = 0;
+  let nextId = 0;
+  const timers = new Map();
+  return {
+    setTimer(callback, delay) {
+      const id = nextId++;
+      timers.set(id, { at: now + delay, callback });
+      return id;
+    },
+    clearTimer(id) { timers.delete(id); },
+    advance(ms) {
+      now += ms;
+      for (const [id, timer] of [...timers].sort((a, b) => a[1].at - b[1].at)) {
+        if (timer.at <= now && timers.delete(id)) timer.callback();
+      }
+    },
+    pending() { return timers.size; }
   };
 }
 
@@ -96,13 +126,102 @@ test("start refreshes on native events and stop detaches the event source", () =
 
   sensor.start();
   native.replace([windowRecord(2)]);
-  native.emitChange();
+  native.emitChange({ immediate: true });
   sensor.stop();
   native.replace([windowRecord(3)]);
   native.emitChange();
 
   assert.deepEqual(changes.map(items => items.map(item => item.hwnd)), [[2]]);
   assert.deepEqual(sensor.snapshot().map(item => item.hwnd), [2]);
+});
+
+test("coalesces a normal event storm at the 75 ms trailing edge", () => {
+  const native = fakeWindowNative([windowRecord(1)]);
+  const clock = fakeClock();
+  let enumerations = 0;
+  let changes = 0;
+  const enumerate = native.enumerateWindows;
+  native.enumerateWindows = () => { enumerations += 1; return enumerate(); };
+  const sensor = createWindowSensor({
+    native,
+    onChange() { changes += 1; },
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer
+  });
+  enumerations = 0;
+  sensor.start();
+
+  for (let index = 0; index < 100; index += 1) {
+    native.emitChange({ event: 0x800b, hwnd: 1, immediate: false });
+  }
+  clock.advance(74);
+  assert.equal(enumerations, 0);
+  assert.equal(changes, 0);
+  clock.advance(1);
+  assert.equal(enumerations, 1);
+  assert.equal(changes, 1);
+});
+
+test("an immediate event cancels a pending normal refresh", () => {
+  const native = fakeWindowNative([windowRecord(1)]);
+  const clock = fakeClock();
+  const changes = [];
+  const sensor = createWindowSensor({
+    native,
+    onChange(_obstacles, meta) { changes.push(meta); },
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer
+  });
+  sensor.start();
+  native.emitChange({ event: 0x800b, hwnd: 1, immediate: false });
+  native.emitChange({ event: 0x8001, hwnd: 1, immediate: true });
+  clock.advance(75);
+
+  assert.deepEqual(changes, [{ event: 0x8001, hwnd: 1, immediate: true }]);
+});
+
+test("stop cancels timer id zero and ignores events even when unsubscribe needs retry", () => {
+  const native = fakeWindowNative([windowRecord(1)]);
+  const clock = fakeClock();
+  let changes = 0;
+  let attempts = 0;
+  let listener;
+  native.subscribe = callback => {
+    listener = callback;
+    return () => { attempts += 1; return attempts > 1; };
+  };
+  const sensor = createWindowSensor({
+    native,
+    onChange() { changes += 1; },
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer
+  });
+  sensor.start();
+  listener({ immediate: false });
+  assert.equal(clock.pending(), 1);
+  assert.equal(sensor.stop(), false);
+  assert.equal(clock.pending(), 0);
+  listener({ immediate: false });
+  clock.advance(75);
+  assert.equal(changes, 0);
+  assert.equal(sensor.stop(), true);
+});
+
+test("failed enumerations preserve the previous complete snapshot and do not notify", () => {
+  const native = fakeWindowNative([windowRecord(1)]);
+  let changes = 0;
+  const sensor = createWindowSensor({ native, onChange() { changes += 1; } });
+  sensor.start();
+  native.enumerateWindows = () => { throw new Error("unavailable"); };
+  assert.equal(sensor.refresh(), null);
+  native.emitChange({ immediate: true });
+  assert.deepEqual(sensor.snapshot().map(item => item.hwnd), [1]);
+  assert.equal(changes, 0);
+  native.enumerateWindows = () => null;
+  assert.equal(sensor.refresh(), null);
+  native.emitChange({ immediate: true });
+  assert.deepEqual(sensor.snapshot().map(item => item.hwnd), [1]);
+  assert.equal(changes, 0);
 });
 
 test("explicit refresh replaces stale native records before an active escape resumes", () => {

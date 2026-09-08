@@ -9,6 +9,22 @@ const EVENT_OBJECT_LOCATIONCHANGE = 0x800b;
 const WINEVENT_OUTOFCONTEXT = 0;
 const WINEVENT_SKIPOWNPROCESS = 2;
 
+function classifyWindowEvent(event, hwnd, idObject) {
+  const system = event === EVENT_SYSTEM_MINIMIZESTART || event === EVENT_SYSTEM_MINIMIZEEND;
+  const object = idObject === 0 && [
+    EVENT_OBJECT_DESTROY,
+    EVENT_OBJECT_SHOW,
+    EVENT_OBJECT_HIDE,
+    EVENT_OBJECT_LOCATIONCHANGE
+  ].includes(event);
+  if (!system && !object) return null;
+  return {
+    event,
+    hwnd,
+    immediate: event === EVENT_OBJECT_DESTROY || event === EVENT_SYSTEM_MINIMIZESTART
+  };
+}
+
 function normalizeRect(rect) {
   if (!Array.isArray(rect) || rect.length !== 4 || !rect.every(Number.isFinite)) {
     return null;
@@ -108,20 +124,25 @@ function createWinEventSubscriber({
 function createWindowSensor({
   native = createNativeWindowBindings(),
   ownProcessId = process.pid,
-  onChange = () => {}
+  onChange = () => {},
+  debounceMs = 75,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout
 } = {}) {
   let obstacles = Object.freeze([]);
   let unsubscribe = null;
+  let pendingTimer = null;
+  let active = false;
 
   function refresh() {
     let records;
     try {
       records = native.enumerateWindows();
     } catch {
-      records = [];
+      return null;
     }
     if (!Array.isArray(records)) {
-      records = [];
+      return null;
     }
 
     obstacles = Object.freeze(
@@ -130,19 +151,43 @@ function createWindowSensor({
     return obstacles;
   }
 
+  function publish(meta) {
+    if (!active) return;
+    const next = refresh();
+    if (next) onChange(next, meta);
+  }
+
+  function cancelPending() {
+    if (pendingTimer === null) return;
+    clearTimer(pendingTimer);
+    pendingTimer = null;
+  }
+
   refresh();
 
   return Object.freeze({
     refresh,
     start() {
+      active = true;
       if (!unsubscribe) {
-        unsubscribe = native.subscribe(() => {
-          onChange(refresh());
+        unsubscribe = native.subscribe((meta = {}) => {
+          if (!active) return;
+          cancelPending();
+          if (meta.immediate) {
+            publish(meta);
+            return;
+          }
+          pendingTimer = setTimer(() => {
+            pendingTimer = null;
+            publish(meta);
+          }, debounceMs);
         });
       }
       return this;
     },
     stop() {
+      active = false;
+      cancelPending();
       if (!unsubscribe) return true;
       if (unsubscribe() === false) return false;
       unsubscribe = null;
@@ -341,19 +386,13 @@ function createNativeWindowBindings() {
     },
     subscribe(listener) {
       return eventSubscriber.subscribe(
-        (_hook, event, _hwnd, idObject) => {
-          const isSystemEvent = event === EVENT_SYSTEM_MINIMIZESTART || event === EVENT_SYSTEM_MINIMIZEEND;
-          const isWindowEvent = idObject === 0 && (
-            event === EVENT_OBJECT_DESTROY ||
-            event === EVENT_OBJECT_SHOW ||
-            event === EVENT_OBJECT_HIDE ||
-            event === EVENT_OBJECT_LOCATIONCHANGE
-          );
-          if (isSystemEvent || isWindowEvent) listener();
+        (_hook, event, hwnd, idObject) => {
+          const meta = classifyWindowEvent(event, Number(koffi.address(hwnd)), idObject);
+          if (meta) listener(meta);
         }
       );
     }
   };
 }
 
-module.exports = { createWinEventSubscriber, createWindowSensor };
+module.exports = { classifyWindowEvent, createWinEventSubscriber, createWindowSensor };

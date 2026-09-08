@@ -24,6 +24,7 @@ const {
 } = require("./runtime/pet-controller");
 const { SettingsStore } = require("./runtime/settings");
 const { runRuntimeTick } = require("./runtime/runtime-tick");
+const { createWindowSupportCoordinator } = require("./runtime/window-support-coordinator");
 const {
   createBackgroundModeCoordinator,
   createBackgroundModeTransitions,
@@ -62,6 +63,7 @@ let rendererCommandBridge;
 let speechFlow;
 let settingsStore;
 let windowSensor;
+let windowSupportCoordinator;
 let fallTimer;
 let foregroundTimer;
 let backgroundModeCoordinator;
@@ -287,9 +289,8 @@ function syncControllerObstacles() {
 function createRuntime() {
   const obstacleIndex = new ObstacleIndex();
   windowSensor = createWindowSensor({
-    onChange(obstacles) {
-      obstacleIndex.replace("windows", obstacles);
-      syncControllerObstacles();
+    onChange(obstacles, meta) {
+      windowSupportCoordinator.handleSnapshot(obstacles, meta);
     }
   });
   obstacleIndex.replace("windows", windowSensor.snapshot());
@@ -333,6 +334,12 @@ function createRuntime() {
     isBackgroundPaused: () => runtimePaused,
     renderWindow: liveWindowAdapter(() => petWindow, () => repositionSpeechBubble()),
     hitWindow: liveWindowAdapter(() => hitWindow)
+  });
+  windowSupportCoordinator = createWindowSupportCoordinator({
+    getAttachment: () => controller?.snapshot().attachment,
+    replaceWindows: obstacles => obstacleIndex.replace("windows", obstacles),
+    syncController: syncControllerObstacles,
+    refreshWindows: () => windowSensor.refresh()
   });
   controller.setScale(settingsStore.snapshot().petScale);
   autonomousRoam = createAutonomousRoam();
@@ -382,7 +389,11 @@ function createRuntime() {
   const foregroundReader = createForegroundWindowReader({ screen });
   const foregroundGate = createForegroundGate({ settleMs: 250 });
   backgroundModeTransitions = createBackgroundModeTransitions({
-    setRuntimePaused(paused) { runtimePaused = paused; return true; },
+    setRuntimePaused(paused) {
+      runtimePaused = paused;
+      windowSupportCoordinator.setPaused(paused);
+      return true;
+    },
     setInputEnabled(enabled) { return Boolean(controller?.setInputBlocked("background", !enabled)); },
     hideBubble: hideSpeechBubble,
     dismissSpeech() { void speechFlow?.dismiss().catch(() => {}); return true; },
@@ -394,8 +405,12 @@ function createRuntime() {
       return controller.reapplyLayer(true);
     },
     refreshObstacles: createTransitionCommand(() => {
-      obstacleIndex.replace("windows", windowSensor.refresh());
-      syncControllerObstacles();
+      windowSupportCoordinator.setPaused(false);
+      try {
+        windowSupportCoordinator.handleSnapshot(windowSensor.refresh(), { immediate: true });
+      } finally {
+        windowSupportCoordinator.setPaused(true);
+      }
     }),
     resetTickClock() { previousTick = Date.now(); return true; }
   });
@@ -427,6 +442,8 @@ function stopRuntime() {
   runtimePaused = false;
   previousTick = undefined;
   runtimeNowMs = undefined;
+  windowSupportCoordinator?.stop();
+  windowSupportCoordinator = undefined;
   if (windowSensor && windowSensor.stop() === false) windowSensor.stop();
   windowSensor = undefined;
   bubbleDisplayMonitor?.stop();

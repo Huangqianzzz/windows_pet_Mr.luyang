@@ -207,7 +207,7 @@ test("main runtime owns one autonomous scheduler and supplies its monotonic tick
   assert.match(main, /backgroundPaused:\s*runtimePaused/);
 });
 
-test("main background refresh enumerates then replaces obstacles before controller synchronization", () => {
+test("main background refresh sends one complete snapshot through the support coordinator", () => {
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "main.js"), "utf8");
   const start = main.indexOf("refreshObstacles:");
   const end = main.indexOf("resetTickClock()", start);
@@ -217,13 +217,24 @@ test("main background refresh enumerates then replaces obstacles before controll
   const { refreshObstacles } = require("node:vm").runInNewContext(`({${main.slice(start, end)}})`, {
     createTransitionCommand,
     windowSensor: { refresh() { calls.push("enumerate"); return obstacles; } },
-    obstacleIndex: { replace(provider, snapshot) {
-      assert.equal(provider, "windows");
-      assert.equal(snapshot, obstacles);
-      calls.push("replace");
-    } },
-    syncControllerObstacles() { calls.push("sync"); return false; }
+    windowSupportCoordinator: {
+      setPaused(value) { calls.push(`paused:${value}`); },
+      handleSnapshot(snapshot, meta) {
+        assert.equal(snapshot, obstacles);
+        assert.equal(meta.immediate, true);
+        calls.push("handle");
+      }
+    }
   });
   assert.equal(refreshObstacles(), true);
-  assert.deepEqual(calls, ["enumerate", "replace", "sync"]);
+  assert.deepEqual(calls, ["paused:false", "enumerate", "handle", "paused:true"]);
+});
+
+test("main delegates window snapshots, background lifecycle, and shutdown to the support coordinator", () => {
+  const main = fs.readFileSync(path.join(__dirname, "..", "src", "main.js"), "utf8");
+  assert.match(main, /createWindowSupportCoordinator/);
+  assert.match(main, /onChange\(obstacles, meta\)[\s\S]*windowSupportCoordinator\.handleSnapshot\(obstacles, meta\)/);
+  assert.match(main, /setRuntimePaused\(paused\)[\s\S]*windowSupportCoordinator\.setPaused\(paused\)/);
+  assert.match(main, /refreshObstacles:[\s\S]*windowSupportCoordinator\.handleSnapshot\(windowSensor\.refresh\(\), \{ immediate: true \}\)/);
+  assert.match(main, /windowSupportCoordinator\?\.stop\(\)/);
 });
