@@ -28,6 +28,7 @@ const RECOVERY_ACTIONS = new Set([
 ]);
 const SPEECH_TEXT = new Set(["爸爸", "我错了"]);
 let latestBackgroundMode;
+let latestVisualOffset;
 
 function exactKeys(value, keys) {
   if (!value || typeof value !== "object") return false;
@@ -140,7 +141,10 @@ ipcRenderer.on("desktop-pet:background-mode", (_event, rawMode) => {
 
 ipcRenderer.on("desktop-pet:visual-offset", (_event, rawOffset) => {
   const offset = visualOffset(rawOffset);
-  if (offset) window.dispatchEvent(new CustomEvent("desktop-pet:visual-offset", { detail: offset }));
+  if (offset) {
+    latestVisualOffset = offset;
+    window.dispatchEvent(new CustomEvent("desktop-pet:visual-offset", { detail: offset }));
+  }
 });
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -148,6 +152,9 @@ window.addEventListener("DOMContentLoaded", () => {
     window.dispatchEvent(new CustomEvent("desktop-pet:background-mode", {
       detail: latestBackgroundMode
     }));
+  }
+  if (latestVisualOffset) {
+    window.dispatchEvent(new CustomEvent("desktop-pet:visual-offset", { detail: latestVisualOffset }));
   }
 });
 

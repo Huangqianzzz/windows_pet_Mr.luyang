@@ -304,6 +304,39 @@ test("preload forwards only exact finite visual offset payloads", () => {
   assert.deepEqual(dispatched.map(event => JSON.parse(JSON.stringify(event.detail))), [{ x: 96.45, y: 96.2 }]);
 });
 
+test("preload replays the last valid visual offset when the DOM becomes ready", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "src", "preload.js"), "utf8");
+  const ipcHandlers = new Map();
+  const localHandlers = new Map();
+  const dispatched = [];
+  class CustomEvent {
+    constructor(type, { detail }) { this.type = type; this.detail = detail; }
+  }
+  vm.runInNewContext(source, {
+    CustomEvent,
+    window: {
+      addEventListener(type, listener) { localHandlers.set(type, listener); },
+      dispatchEvent(event) { dispatched.push(event); }
+    },
+    require(id) {
+      assert.equal(id, "electron");
+      return {
+        contextBridge: { exposeInMainWorld() {} },
+        ipcRenderer: { invoke: () => Promise.resolve(), on(channel, listener) { ipcHandlers.set(channel, listener); } }
+      };
+    }
+  });
+
+  ipcHandlers.get("desktop-pet:visual-offset")({}, { x: 96.45, y: 96.2 });
+  ipcHandlers.get("desktop-pet:visual-offset")({}, { x: Infinity, y: 1 });
+  localHandlers.get("DOMContentLoaded")();
+
+  assert.deepEqual(dispatched.map(event => JSON.parse(JSON.stringify(event.detail))), [
+    { x: 96.45, y: 96.2 },
+    { x: 96.45, y: 96.2 }
+  ]);
+});
+
 test("renderer combines rest and background pause reasons across bootstrap and play", async () => {
   const { mountPet } = require("../src/render/pet-renderer");
   let resolveBootstrap;

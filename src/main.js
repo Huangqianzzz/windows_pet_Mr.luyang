@@ -244,8 +244,9 @@ function repositionSpeechBubble(body = controller?.snapshot().body) {
 
 function renderPetBody(body, { dragging = false } = {}) {
   if (!renderBuffer || !petWindow || petWindow.isDestroyed()) return false;
-  const placement = renderBuffer.place(body, { dragging });
+  const placement = renderBuffer.place(body, { dragging, defer: true });
   if (placement.recentered) petWindow.setBounds(placement.hostBounds, false);
+  renderBuffer.commit(placement);
   const scale = settingsStore?.snapshot().petScale || 1;
   petWindow.webContents.send(VISUAL_OFFSET_CHANNEL, {
     x: placement.localX / scale,

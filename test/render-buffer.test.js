@@ -58,6 +58,21 @@ test("resizing recenters without changing the body's global top-left anchor", ()
   assert.equal(resized.hostBounds.y + resized.localY, body.y);
 });
 
+test("does not commit a deferred host move when native placement fails", () => {
+  const buffer = createRenderBuffer({ margin: 96, safeInset: 32 });
+  const body = { x: 100, y: 100, width: 20, height: 30 };
+  const first = buffer.place(body);
+  const failedPlacement = buffer.place({ ...body, x: 164.1 }, { defer: true });
+
+  assert.equal(failedPlacement.recentered, true);
+  const rollback = buffer.place(body, { defer: true });
+  assert.deepEqual(rollback.hostBounds, first.hostBounds);
+  const retry = buffer.place({ ...body, x: 164.1 }, { defer: true });
+  assert.equal(retry.recentered, true);
+  assert.equal(buffer.commit(retry), true);
+  assert.equal(buffer.place({ ...body, x: 164.1 }, { defer: true }).recentered, false);
+});
+
 test("rejects invalid buffer configuration and body geometry", () => {
   assert.throws(() => createRenderBuffer({ margin: 0 }), /margin/);
   assert.throws(() => createRenderBuffer({ safeInset: 97 }), /safeInset/);
