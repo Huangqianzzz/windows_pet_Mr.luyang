@@ -16,6 +16,7 @@ const {
 } = require("./runtime/animation-protocol");
 const { createMenuTemplate, isMenuAction } = require("./runtime/menu");
 const { liveWindowAdapter } = require("./runtime/live-window-adapter");
+const { createRenderBuffer } = require("./runtime/render-buffer");
 const { ObstacleIndex } = require("./runtime/obstacle-index");
 const {
   isTrustedIpcSender,
@@ -52,6 +53,7 @@ const INTERACTION_COMMAND_CHANNEL = "desktop-pet:interaction-command";
 const INTERACTION_RESULT_CHANNEL = "desktop-pet:interaction-result";
 const BUBBLE_UPDATE_CHANNEL = "desktop-pet:bubble-update";
 const BACKGROUND_MODE_CHANNEL = "desktop-pet:background-mode";
+const VISUAL_OFFSET_CHANNEL = "desktop-pet:visual-offset";
 const BUBBLE_SIZE = Object.freeze({ width: 220, height: 90 });
 
 let petWindow;
@@ -78,6 +80,7 @@ let bubbleDisplayMonitor;
 let autonomousRoam;
 let animationBootstrap;
 let desktopIconMonitor;
+let renderBuffer;
 
 function secureWebPreferences() {
   return {
@@ -112,6 +115,7 @@ function createPetWindow() {
   petWindow.once("ready-to-show", () => petWindow.show());
   petWindow.on("closed", () => {
     petWindow = undefined;
+    renderBuffer = undefined;
     if (hitWindow && !hitWindow.isDestroyed()) hitWindow.close();
     if (bubbleWindow && !bubbleWindow.isDestroyed()) bubbleWindow.close();
   });
@@ -197,11 +201,13 @@ function integerBounds(rect) {
   };
 }
 
-function repositionSpeechBubble() {
+function repositionSpeechBubble(body = controller?.snapshot().body) {
   const text = activeBubbleText;
   if (!text) return false;
   if (!petWindow || petWindow.isDestroyed() || !bubbleWindow || bubbleWindow.isDestroyed()) return false;
-  const petRect = petWindow.getBounds();
+  if (!body || ![body.x, body.y, body.width, body.height].every(Number.isFinite)
+    || body.width <= 0 || body.height <= 0) return false;
+  const petRect = body;
   const scale = settingsStore?.snapshot().petScale || 1;
   const fallbackFaceBox = {
     x: Math.round(petRect.width * 0.35),
@@ -234,6 +240,19 @@ function repositionSpeechBubble() {
   bubbleWindow.webContents.send(BUBBLE_UPDATE_CHANNEL, { text });
   bubbleWindow.showInactive();
   return placement;
+}
+
+function renderPetBody(body, { dragging = false } = {}) {
+  if (!renderBuffer || !petWindow || petWindow.isDestroyed()) return false;
+  const placement = renderBuffer.place(body, { dragging });
+  if (placement.recentered) petWindow.setBounds(placement.hostBounds, false);
+  const scale = settingsStore?.snapshot().petScale || 1;
+  petWindow.webContents.send(VISUAL_OFFSET_CHANNEL, {
+    x: placement.localX / scale,
+    y: placement.localY / scale
+  });
+  repositionSpeechBubble(body);
+  return true;
 }
 
 async function showSpeechBubble(text) {
@@ -288,6 +307,7 @@ function syncControllerObstacles() {
 
 function createRuntime() {
   const obstacleIndex = new ObstacleIndex();
+  renderBuffer = createRenderBuffer();
   windowSensor = createWindowSensor({
     onChange(obstacles, meta) {
       windowSupportCoordinator.handleSnapshot(obstacles, meta);
@@ -332,7 +352,7 @@ function createRuntime() {
     layerCoordinator,
     hideBubble: hideSpeechBubble,
     isBackgroundPaused: () => runtimePaused,
-    renderWindow: liveWindowAdapter(() => petWindow, () => repositionSpeechBubble()),
+    renderWindow: { render: renderPetBody },
     hitWindow: liveWindowAdapter(() => hitWindow)
   });
   windowSupportCoordinator = createWindowSupportCoordinator({
@@ -341,9 +361,11 @@ function createRuntime() {
     syncController: syncControllerObstacles,
     refreshWindows: () => windowSensor.refresh()
   });
-  controller.setScale(settingsStore.snapshot().petScale);
+  const petScale = settingsStore.snapshot().petScale;
+  controller.setScale(petScale);
   autonomousRoam = createAutonomousRoam();
-  petWindow.webContents.setZoomFactor(settingsStore.snapshot().petScale);
+  petWindow.webContents.setZoomFactor(petScale);
+  renderPetBody(controller.snapshot().body);
   speechFlow = createSpeechFlow({
     beginSpeech: () => Boolean(controller?.beginSpeech()),
     async playKneel() {
@@ -501,6 +523,7 @@ async function handleMenuAction(action, value) {
     const updated = updateSettings({ petScale: value });
     controller?.setScale(updated.petScale);
     petWindow?.webContents.setZoomFactor(updated.petScale);
+    if (controller) renderPetBody(controller.snapshot().body);
     return true;
   }
   if (action === "set-volume") {

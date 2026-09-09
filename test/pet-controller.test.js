@@ -15,6 +15,9 @@ function createHarness(overrides = {}) {
   const renderBounds = [];
   const hitEvents = [];
   const played = [];
+  const renderWindow = overrides.renderWindow || {
+    setBounds(bounds) { renderBounds.push(bounds); }
+  };
   const animationBridge = overrides.animationBridge || {
     play(action, options) {
       played.push({ action, options });
@@ -25,9 +28,7 @@ function createHarness(overrides = {}) {
     obstacleIndex,
     animationBridge,
     body: overrides.body || { x: 0, y: 0, width: 20, height: 30, vx: 0, vy: 0 },
-    renderWindow: {
-      setBounds(bounds) { renderBounds.push(bounds); }
-    },
+    renderWindow,
     hitWindow: {
       hide() { hitEvents.push({ type: "hide" }); },
       setBounds(bounds) { hitEvents.push({ type: "bounds", bounds }); },
@@ -89,6 +90,33 @@ test("input blocking reasons compose and legacy compatibility does not clear bac
   assert.equal(hitEvents.filter(event => event.type === "show").length, 2);
   assert.equal(controller.setInputBlocked("", true), false);
   assert.equal(controller.setInputBlocked("background", 1), false);
+});
+
+test("passes an unrounded DIP body and drag state to the render adapter", () => {
+  const calls = [];
+  const { controller, hitEvents } = createHarness({
+    renderWindow: {
+      render(body, options) { calls.push({ body, options }); }
+    }
+  });
+  controller.startCrawl();
+  controller.setFrameHitBox({ x: 0, y: 0, width: 10, height: 10 });
+
+  controller.moveCrawl(0.45, 0.2, { x: -100, y: -100, width: 1000, height: 1000 });
+
+  assert.deepEqual(calls.at(-1), {
+    body: { x: 0.45, y: 0.2, width: 20, height: 30, vx: 0, vy: 0 },
+    options: { dragging: false }
+  });
+  assert.deepEqual(hitEvents.at(-1), {
+    type: "bounds", bounds: { x: 0, y: 0, width: 10, height: 10 }
+  });
+
+  controller.handleInput("drag-start", { x: 0.45, y: 0.2 });
+  controller.handleInput("drag-move", { x: 10.7, y: 20.8 });
+  assert.equal(calls.at(-1).options.dragging, true);
+  assert.equal(calls.at(-1).body.x, 10.7);
+  assert.equal(calls.at(-1).body.y, 20.8);
 });
 
 test("does not begin an escape if layer placement fails", () => {

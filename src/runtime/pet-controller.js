@@ -733,6 +733,10 @@ class PetController {
   }
 
   #renderBody() {
+    if (this.renderWindow?.render) {
+      this.renderWindow.render({ ...this.body }, { dragging: this.state.mode === "dragging" });
+      return;
+    }
     this.renderWindow?.setBounds?.({
       x: Math.round(this.body.x),
       y: Math.round(this.body.y),

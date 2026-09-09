@@ -358,7 +358,7 @@ test("a renderer command that times out before bootstrap ready expires without c
   const mounted = mountPet({
     document: {
       getElementById: () => ({ append() {} }),
-      createElement: () => ({ style: {}, setAttribute() {} })
+      createElement: () => ({ children: [], style: {}, setAttribute() {}, append(child) { this.children.push(child); } })
     },
     desktopPet: { getBootstrap: () => bootstrap },
     AnimationPlayer: Player,
@@ -486,7 +486,7 @@ test("renderer owns the only player for kneel fallback and exact-frame rest free
   const mounted = mountPet({
     document: {
       getElementById: () => ({ append() {} }),
-      createElement: () => ({ style: {}, setAttribute() {} })
+      createElement: () => ({ children: [], style: {}, setAttribute() {}, append(child) { this.children.push(child); } })
     },
     desktopPet: { getBootstrap: async () => ({ manifest }) },
     AnimationPlayer: Player,
@@ -539,7 +539,7 @@ test("renderer force-recovers a non-interruptible kneel to the whitelisted contr
   const mounted = mountPet({
     document: {
       getElementById: () => ({ append() {} }),
-      createElement: () => ({ style: {}, setAttribute() {} })
+      createElement: () => ({ children: [], style: {}, setAttribute() {}, append(child) { this.children.push(child); } })
     },
     desktopPet: { getBootstrap: async () => ({ manifest: { actions: { idle: action, kneel: action, prone: action } } }) },
     AnimationPlayer: Player,
@@ -570,7 +570,7 @@ test("main declares a non-focusable unclipped bubble window and trusted internal
   assert.match(main, /Menu\.buildFromTemplate\(createMenuTemplate\(/);
   assert.match(main, /did-finish-load/);
   assert.match(main, /activeBubbleText/);
-  assert.match(main, /liveWindowAdapter\(\(\) => petWindow, \(\) => repositionSpeechBubble\(\)\)/);
+  assert.match(main, /renderWindow:\s*\{\s*render:\s*renderPetBody\s*}/);
   assert.match(main, /createBubbleDisplayMonitor\(\{[\s\S]*?screen,[\s\S]*?reposition:\s*repositionSpeechBubble/);
   assert.match(main, /bubbleDisplayMonitor\?\.stop\(\)/);
   assert.match(main, /request\("recover",\s*action\)/);

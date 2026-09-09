@@ -102,6 +102,11 @@ function backgroundMode(value) {
   return { paused: value.paused };
 }
 
+function visualOffset(value) {
+  if (!exactKeys(value, ["x", "y"]) || ![value.x, value.y].every(Number.isFinite)) return null;
+  return { x: value.x, y: value.y };
+}
+
 function invokeInternal(channel, payload) {
   ipcRenderer.invoke(channel, payload).catch(() => {});
 }
@@ -131,6 +136,11 @@ ipcRenderer.on("desktop-pet:background-mode", (_event, rawMode) => {
     latestBackgroundMode = mode;
     window.dispatchEvent(new CustomEvent("desktop-pet:background-mode", { detail: mode }));
   }
+});
+
+ipcRenderer.on("desktop-pet:visual-offset", (_event, rawOffset) => {
+  const offset = visualOffset(rawOffset);
+  if (offset) window.dispatchEvent(new CustomEvent("desktop-pet:visual-offset", { detail: offset }));
 });
 
 window.addEventListener("DOMContentLoaded", () => {

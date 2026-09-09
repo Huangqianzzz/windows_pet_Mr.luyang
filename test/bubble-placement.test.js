@@ -1,5 +1,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
 function intersectionArea(a, b) {
   const width = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
@@ -106,4 +108,14 @@ test("rejects malformed placement inputs instead of returning unsafe geometry", 
 
   assert.throws(() => placeBubble({ ...valid, bubbleSize: { width: 0, height: 10 } }), /bubbleSize/);
   assert.throws(() => placeBubble({ ...valid, pointer: { x: Number.NaN, y: 0 } }), /pointer/);
+});
+
+test("main positions bubbles from the controller's logical body, not render host bounds", () => {
+  const main = fs.readFileSync(path.join(__dirname, "..", "src", "main.js"), "utf8");
+  const bubbleFunction = main.match(/function repositionSpeechBubble\([\s\S]*?\r?\n}\r?\n\r?\nasync function showSpeechBubble/);
+
+  assert.ok(bubbleFunction);
+  assert.match(bubbleFunction[0], /function repositionSpeechBubble\(body = controller\?\.snapshot\(\)\.body\)/);
+  assert.match(bubbleFunction[0], /const petRect = body;/);
+  assert.doesNotMatch(bubbleFunction[0], /petWindow\.getBounds\(\)/);
 });

@@ -48,6 +48,48 @@ test("left-facing crawl mirrors the sprite and frame geometry inside its source 
   assert.throws(() => mirrorBox({ x: 9, y: 0, width: 2, height: 1 }, 10), /inside/);
 });
 
+test("visual offsets translate only the stage and reject malformed IPC payloads", async () => {
+  const { mountPet } = require("../src/render/pet-renderer");
+  const root = { children: [], append(child) { this.children.push(child); } };
+  const eventTarget = localEventTarget();
+  const frame = {
+    source: { x: 0, y: 0, width: 10, height: 10 },
+    faceBox: { x: 2, y: 1, width: 5, height: 4 },
+    hitBox: { x: 1, y: 1, width: 8, height: 8 }
+  };
+  const action = { sheet: { file: "idle.png", width: 10, height: 10 }, loop: true, frames: [frame] };
+  class Player {
+    constructor(manifest) { this.manifest = manifest; }
+    play(name, { onFrame }) { onFrame?.(frame, 0, name); return this; }
+  }
+  const mounted = mountPet({
+    document: {
+      getElementById: () => root,
+      createElement: () => ({ children: [], style: {}, setAttribute() {}, append(child) { this.children.push(child); } })
+    },
+    desktopPet: { getBootstrap: async () => ({ manifest: { actions: { idle: action, crawl: action } } }) },
+    AnimationPlayer: Player,
+    locationHref: "file:///C:/pet/src/render/pet.html",
+    eventTarget
+  });
+
+  await mounted.ready;
+  eventTarget.dispatchEvent(new LocalCustomEvent("desktop-pet:animation-command", {
+    detail: { id: 1, action: "crawl", force: false, facing: "left" }
+  }));
+  eventTarget.dispatchEvent(new LocalCustomEvent("desktop-pet:visual-offset", { detail: { x: 96.45, y: 96.2 } }));
+
+  const stage = root.children[0];
+  const sprite = stage.children[0];
+  assert.equal(stage.className, "pet-stage");
+  assert.equal(stage.style.transform, "translate3d(96.45px, 96.2px, 0)");
+  assert.equal(sprite.className, "pet-sprite");
+  assert.equal(sprite.style.transform, "scaleX(-1)");
+  eventTarget.dispatchEvent(new LocalCustomEvent("desktop-pet:visual-offset", { detail: { x: Infinity, y: 1 } }));
+  eventTarget.dispatchEvent(new LocalCustomEvent("desktop-pet:visual-offset", { detail: { x: 1, y: 2, extra: true } }));
+  assert.equal(stage.style.transform, "translate3d(96.45px, 96.2px, 0)");
+});
+
 test("bootstraps idle and applies its first sprite-sheet frame", async () => {
   const root = { children: [], append(child) { this.children.push(child); } };
   const rendererPath = path.join(__dirname, "..", "src", "render", "pet-renderer.js");
@@ -93,9 +135,11 @@ test("bootstraps idle and applies its first sprite-sheet frame", async () => {
     getElementById: (id) => (id === "pet-root" ? root : null),
     createElement: (tagName) => ({
       tagName,
+      children: [],
       attributes: {},
       style: {},
-      setAttribute(name, value) { this.attributes[name] = value; }
+      setAttribute(name, value) { this.attributes[name] = value; },
+      append(child) { this.children.push(child); }
     })
   };
 
@@ -116,14 +160,16 @@ test("bootstraps idle and applies its first sprite-sheet frame", async () => {
   await mounted.ready;
 
   assert.equal(root.children.length, 1);
-  assert.equal(root.children[0].className, "pet-sprite");
+  assert.equal(root.children[0].className, "pet-stage");
   assert.equal(root.children[0].attributes["aria-hidden"], "true");
+  assert.equal(root.children[0].children[0].className, "pet-sprite");
+  assert.equal(root.children[0].children[0].attributes["aria-hidden"], "true");
   assert.equal(playedAction, "idle");
-  assert.equal(root.children[0].style.width, "10px");
-  assert.equal(root.children[0].style.height, "10px");
-  assert.equal(root.children[0].style.backgroundPosition, "-10px 0px");
-  assert.equal(root.children[0].style.backgroundSize, "30px 10px");
-  assert.equal(root.children[0].style.backgroundImage, "url(\"file:///C:/pet/assets/animations/sheets/idle.png\")");
+  assert.equal(root.children[0].children[0].style.width, "10px");
+  assert.equal(root.children[0].children[0].style.height, "10px");
+  assert.equal(root.children[0].children[0].style.backgroundPosition, "-10px 0px");
+  assert.equal(root.children[0].children[0].style.backgroundSize, "30px 10px");
+  assert.equal(root.children[0].children[0].style.backgroundImage, "url(\"file:///C:/pet/assets/animations/sheets/idle.png\")");
   assert.deepEqual(hitBoxes, [{ x: 1, y: 1, width: 8, height: 8 }]);
   assert.deepEqual(supportAnchors, [{ action: "idle", x: 5, y: 10 }]);
   global.window = previousWindow;
@@ -168,7 +214,7 @@ test("renders from the player's frozen manifest after bootstrap data is tampered
   }
   const document = {
     getElementById: () => root,
-    createElement: () => ({ style: {}, setAttribute() {} })
+    createElement: () => ({ children: [], style: {}, setAttribute() {}, append(child) { this.children.push(child); } })
   };
   const mounted = renderer.mountPet({
     document,
@@ -180,8 +226,8 @@ test("renders from the player's frozen manifest after bootstrap data is tampered
 
   await mounted.ready;
 
-  assert.equal(root.children[0].style.backgroundImage, "url(\"file:///C:/pet/assets/animations/idle.png\")");
-  assert.equal(root.children[0].style.backgroundPosition, "-10px 0px");
+  assert.equal(root.children[0].children[0].style.backgroundImage, "url(\"file:///C:/pet/assets/animations/idle.png\")");
+  assert.equal(root.children[0].children[0].style.backgroundPosition, "-10px 0px");
 });
 
 test("preload forwards only the exact desktop-pet background mode payload", () => {
@@ -229,6 +275,35 @@ test("preload forwards only the exact desktop-pet background mode payload", () =
   ]);
 });
 
+test("preload forwards only exact finite visual offset payloads", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "src", "preload.js"), "utf8");
+  const ipcHandlers = new Map();
+  const dispatched = [];
+  class CustomEvent {
+    constructor(type, { detail }) { this.type = type; this.detail = detail; }
+  }
+  vm.runInNewContext(source, {
+    CustomEvent,
+    window: { addEventListener() {}, dispatchEvent(event) { dispatched.push(event); } },
+    require(id) {
+      assert.equal(id, "electron");
+      return {
+        contextBridge: { exposeInMainWorld() {} },
+        ipcRenderer: { invoke: () => Promise.resolve(), on(channel, listener) { ipcHandlers.set(channel, listener); } }
+      };
+    }
+  });
+
+  const receive = ipcHandlers.get("desktop-pet:visual-offset");
+  assert.equal(typeof receive, "function");
+  receive({}, { x: 96.45, y: 96.2 });
+  receive({}, { x: Number.NaN, y: 1 });
+  receive({}, { x: 1, y: Infinity });
+  receive({}, { x: "1", y: 2 });
+  receive({}, { x: 1, y: 2, extra: true });
+  assert.deepEqual(dispatched.map(event => JSON.parse(JSON.stringify(event.detail))), [{ x: 96.45, y: 96.2 }]);
+});
+
 test("renderer combines rest and background pause reasons across bootstrap and play", async () => {
   const { mountPet } = require("../src/render/pet-renderer");
   let resolveBootstrap;
@@ -258,7 +333,7 @@ test("renderer combines rest and background pause reasons across bootstrap and p
   const mounted = mountPet({
     document: {
       getElementById: () => ({ append() {} }),
-      createElement: () => ({ style: {}, setAttribute() {} })
+      createElement: () => ({ children: [], style: {}, setAttribute() {}, append(child) { this.children.push(child); } })
     },
     desktopPet: { getBootstrap: () => bootstrap },
     AnimationPlayer: Player,
@@ -324,7 +399,7 @@ test("renderer freezes from bootstrap truth when the initial background IPC was 
   const mounted = mountPet({
     document: {
       getElementById: () => ({ append() {} }),
-      createElement: () => ({ style: {}, setAttribute() {} })
+      createElement: () => ({ children: [], style: {}, setAttribute() {}, append(child) { this.children.push(child); } })
     },
     desktopPet: { getBootstrap: async () => ({ manifest, backgroundPaused: true }) },
     AnimationPlayer: Player,

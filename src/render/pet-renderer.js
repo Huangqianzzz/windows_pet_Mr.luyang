@@ -85,6 +85,13 @@
       : { id: value.id, type: value.type, expiresAt: value.expiresAt };
   }
 
+  function validateVisualOffset(value) {
+    if (!value || typeof value !== "object" || Object.keys(value).length !== 2
+      || !Object.hasOwn(value, "x") || !Object.hasOwn(value, "y")
+      || ![value.x, value.y].every(Number.isFinite)) return null;
+    return { x: value.x, y: value.y };
+  }
+
   function createLocalPauseCoordinator({ freeze, resume }) {
     const reasons = new Set();
     return {
@@ -102,10 +109,14 @@
 
   function mountPet({ document, desktopPet, AnimationPlayer, locationHref, eventTarget = global, now = Date.now }) {
     const root = document.getElementById("pet-root");
+    const stage = document.createElement("div");
+    stage.className = "pet-stage";
+    stage.setAttribute("aria-hidden", "true");
     const sprite = document.createElement("div");
     sprite.className = "pet-sprite";
     sprite.setAttribute("aria-hidden", "true");
-    root.append(sprite);
+    stage.append(sprite);
+    root.append(stage);
 
     let player;
     let currentFacing = "right";
@@ -212,6 +223,24 @@
         pauses.set("background", event.detail.paused);
       }
     });
+    let pendingVisualOffset;
+    let visualOffsetScheduled = false;
+    const requestFrame = typeof global.requestAnimationFrame === "function"
+      ? global.requestAnimationFrame.bind(global)
+      : callback => callback();
+    eventTarget.addEventListener("desktop-pet:visual-offset", event => {
+      const offset = validateVisualOffset(event.detail);
+      if (!offset) return;
+      pendingVisualOffset = offset;
+      if (visualOffsetScheduled) return;
+      visualOffsetScheduled = true;
+      requestFrame(() => {
+        visualOffsetScheduled = false;
+        const current = pendingVisualOffset;
+        pendingVisualOffset = undefined;
+        if (current) stage.style.transform = `translate3d(${current.x}px, ${current.y}px, 0)`;
+      });
+    });
 
     const ready = desktopPet.getBootstrap()
       .then(({ manifest, backgroundPaused }) => {
@@ -228,7 +257,7 @@
         return player;
       })
       .catch(() => undefined);
-    return { sprite, ready };
+    return { stage, sprite, ready };
   }
 
   const api = { animationAssetUrl, applyFrame, mirrorBox, mirrorPoint, mountPet, validateInteractionCommand };

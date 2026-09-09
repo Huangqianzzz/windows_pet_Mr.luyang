@@ -104,7 +104,7 @@ test("controller commands the sole renderer player and restores hit input only o
   const mounted = mountPet({
     document: {
       getElementById: () => root,
-      createElement: () => ({ style: {}, setAttribute() {} })
+      createElement: () => ({ children: [], style: {}, setAttribute() {}, append(child) { this.children.push(child); } })
     },
     desktopPet: { getBootstrap: () => Promise.resolve({ manifest }) },
     AnimationPlayer: FakeAnimationPlayer,
@@ -201,7 +201,7 @@ test("renderer falls back a validated command missing from the manifest to idle"
   const mounted = mountPet({
     document: {
       getElementById: () => ({ append() {} }),
-      createElement: () => ({ style: {}, setAttribute() {} })
+      createElement: () => ({ children: [], style: {}, setAttribute() {}, append(child) { this.children.push(child); } })
     },
     desktopPet: { getBootstrap: () => Promise.resolve({ manifest }) },
     AnimationPlayer: FakeAnimationPlayer,
