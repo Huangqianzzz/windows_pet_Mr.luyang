@@ -5,6 +5,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { EventEmitter } = require("node:events");
 const { PassThrough } = require("node:stream");
+const vm = require("node:vm");
 
 function fakeSpeechProcess(output, calls) {
   return (command, args, options) => {
@@ -28,7 +29,7 @@ test("passes exact Chinese text over stdin to a static PowerShell command withou
   const { speakChinese } = require("../src/runtime/speech");
   const calls = [];
 
-  const result = await speakChinese("爸爸", 80, {
+  const result = await speakChinese("爸爸，我错了", 80, {
     platform: "win32",
     spawnImpl: fakeSpeechProcess({ spoken: true, voiceCulture: "zh-CN" }, calls)
   });
@@ -39,10 +40,10 @@ test("passes exact Chinese text over stdin to a static PowerShell command withou
   assert.equal(calls[0].options.shell, false);
   assert.equal(calls[0].options.windowsHide, true);
   assert.equal(calls[0].args.join(" ").includes("爸爸"), false);
-  assert.deepEqual(JSON.parse(calls[0].stdin), { text: "爸爸", volume: 80 });
+  assert.deepEqual(JSON.parse(calls[0].stdin), { text: "爸爸，我错了", volume: 80 });
 });
 
-test("allows only the two exact phrases and reports a missing Chinese voice", async () => {
+test("allows approved exact phrases and reports a missing Chinese voice", async () => {
   const { speakChinese } = require("../src/runtime/speech");
   let spawned = 0;
   const invalid = await speakChinese("爸爸; Stop-Computer", 100, {
@@ -416,8 +417,7 @@ test("release menu hides deferred duel actions while keeping person-pet controls
   });
 
   assert.deepEqual(MENU_LABELS, [
-    "叫“爸爸”",
-    "说“我错了”",
+    "说“爸爸，我错了”",
     "原地休息/恢复活动",
     "自主活动",
     "桌宠大小",
@@ -429,7 +429,8 @@ test("release menu hides deferred duel actions while keeping person-pet controls
   assert.deepEqual(template.map(item => item.label), MENU_LABELS);
   assert.equal(template.some(item => item.label === "挑战螃蟹"), false);
   assert.equal(template.some(item => item.label === "自动约战"), false);
-  assert.equal(isMenuAction("speak-father"), true);
+  assert.equal(isMenuAction("speak-combined"), true);
+  assert.equal(isMenuAction("speak-father"), false);
   assert.equal(isMenuAction("quit; Remove-Item C:\\"), false);
 
   const restingTemplate = createMenuTemplate({
@@ -561,6 +562,7 @@ test("renderer force-recovers a non-interruptible kneel to the whitelisted contr
 
 test("main declares a non-focusable unclipped bubble window and trusted internal IPC gates", () => {
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "main.js"), "utf8");
+  assert.match(main, /BUBBLE_SIZE\s*=\s*Object\.freeze\(\{\s*width:\s*180,\s*height:\s*72\s*}\)/);
   assert.match(main, /bubbleWindow\s*=\s*new BrowserWindow\(\{[\s\S]*?transparent:\s*true/);
   assert.match(main, /bubbleWindow\s*=\s*new BrowserWindow\(\{[\s\S]*?focusable:\s*false/);
   assert.match(main, /bubbleWindow\.setIgnoreMouseEvents\(true\)/);
@@ -577,7 +579,7 @@ test("main declares a non-focusable unclipped bubble window and trusted internal
   assert.match(main, /app\.isPackaged[\s\S]*?setAutostart/);
 });
 
-test("bubble document is local-only and visibly renders the two pink speech phrases", () => {
+test("bubble document is local-only and renders the compact translucent combined phrase", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "src", "render", "bubble.html"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "render", "bubble.css"), "utf8");
   const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "render", "bubble-renderer.js"), "utf8");
@@ -585,7 +587,21 @@ test("bubble document is local-only and visibly renders the two pink speech phra
   assert.match(html, /Content-Security-Policy/);
   assert.match(html, /id="speech-bubble"/);
   assert.match(html, /bubble-renderer\.js/);
-  assert.match(css, /background:\s*#[fF][fF][89][aA][bB][bB]/);
+  assert.match(css, /background:\s*rgba\(255,\s*138,\s*187,\s*0\.82\)/);
+  assert.match(css, /font-size:\s*20px/);
   assert.match(renderer, /desktop-pet:bubble-update/);
   assert.match(renderer, /textContent/);
+
+  const bubble = { textContent: "" };
+  let updateBubble;
+  vm.runInNewContext(renderer, {
+    window: {
+      document: { getElementById: () => bubble },
+      addEventListener: (name, listener) => {
+        if (name === "desktop-pet:bubble-update") updateBubble = listener;
+      }
+    }
+  });
+  updateBubble({ detail: { text: "爸爸，我错了" } });
+  assert.equal(bubble.textContent, "爸爸，我错了");
 });

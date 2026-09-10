@@ -1,6 +1,5 @@
 const MENU_LABELS = Object.freeze([
-  "叫“爸爸”",
-  "说“我错了”",
+  "说“爸爸，我错了”",
   "原地休息/恢复活动",
   "自主活动",
   "桌宠大小",
@@ -11,8 +10,7 @@ const MENU_LABELS = Object.freeze([
 ]);
 
 const MENU_ACTIONS = Object.freeze([
-  "speak-father",
-  "speak-apology",
+  "speak-combined",
   "toggle-rest",
   "toggle-autonomous",
   "set-scale",
@@ -37,12 +35,11 @@ function createMenuTemplate({ settings, resting = false, onAction }) {
   const scaleValues = [1, 1.25, 1.5, 1.75, 2];
   const volumeValues = [0, 25, 50, 75, 100];
   return [
-    { label: MENU_LABELS[0], click: action(onAction, "speak-father") },
-    { label: MENU_LABELS[1], click: action(onAction, "speak-apology") },
-    { label: MENU_LABELS[2], type: "checkbox", checked: resting, click: action(onAction, "toggle-rest") },
-    { label: MENU_LABELS[3], type: "checkbox", checked: settings.autonomousActivity, click: action(onAction, "toggle-autonomous") },
+    { label: MENU_LABELS[0], click: action(onAction, "speak-combined") },
+    { label: MENU_LABELS[1], type: "checkbox", checked: resting, click: action(onAction, "toggle-rest") },
+    { label: MENU_LABELS[2], type: "checkbox", checked: settings.autonomousActivity, click: action(onAction, "toggle-autonomous") },
     {
-      label: MENU_LABELS[4],
+      label: MENU_LABELS[3],
       submenu: scaleValues.map(value => ({
         label: `${Math.round(value * 100)}%`,
         type: "radio",
@@ -51,7 +48,7 @@ function createMenuTemplate({ settings, resting = false, onAction }) {
       }))
     },
     {
-      label: MENU_LABELS[5],
+      label: MENU_LABELS[4],
       submenu: volumeValues.map(value => ({
         label: `${value}%`,
         type: "radio",
@@ -59,9 +56,9 @@ function createMenuTemplate({ settings, resting = false, onAction }) {
         click: action(onAction, "set-volume", value)
       }))
     },
-    { label: MENU_LABELS[6], type: "checkbox", checked: settings.launchAtLogin, click: action(onAction, "toggle-autostart") },
-    { label: MENU_LABELS[7], click: action(onAction, "open-settings") },
-    { label: MENU_LABELS[8], click: action(onAction, "quit") }
+    { label: MENU_LABELS[5], type: "checkbox", checked: settings.launchAtLogin, click: action(onAction, "toggle-autostart") },
+    { label: MENU_LABELS[6], click: action(onAction, "open-settings") },
+    { label: MENU_LABELS[7], click: action(onAction, "quit") }
   ];
 }
 

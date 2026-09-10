@@ -1,6 +1,6 @@
 const { spawn } = require("node:child_process");
 
-const ALLOWED_TEXT = new Set(["爸爸", "我错了"]);
+const ALLOWED_TEXT = new Set(["爸爸", "我错了", "爸爸，我错了"]);
 const RENDERER_COMMANDS = new Set(["kneel", "freeze", "resume", "recover"]);
 const RECOVERY_ACTIONS = new Set([
   "idle",

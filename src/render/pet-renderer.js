@@ -160,6 +160,7 @@
         onFrame: reportFrame,
         onComplete: complete
       });
+      if (played && command.force) pauses.set("rest", false);
       if (played) reconcilePlayerPause();
       if (played && actionName !== command.action) complete();
       return Boolean(played);

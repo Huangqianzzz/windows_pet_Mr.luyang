@@ -54,7 +54,7 @@ const INTERACTION_RESULT_CHANNEL = "desktop-pet:interaction-result";
 const BUBBLE_UPDATE_CHANNEL = "desktop-pet:bubble-update";
 const BACKGROUND_MODE_CHANNEL = "desktop-pet:background-mode";
 const VISUAL_OFFSET_CHANNEL = "desktop-pet:visual-offset";
-const BUBBLE_SIZE = Object.freeze({ width: 220, height: 90 });
+const BUBBLE_SIZE = Object.freeze({ width: 180, height: 72 });
 
 let petWindow;
 let hitWindow;
@@ -508,9 +508,8 @@ async function toggleRest() {
 
 async function handleMenuAction(action, value) {
   if (!isMenuAction(action)) return false;
-  if (action === "speak-father" || action === "speak-apology") {
-    const text = action === "speak-father" ? "爸爸" : "我错了";
-    void speechFlow?.run(text, settingsStore.snapshot().speechVolume);
+  if (action === "speak-combined") {
+    void speechFlow?.run("爸爸，我错了", settingsStore.snapshot().speechVolume);
     return true;
   }
   if (action === "toggle-rest") return toggleRest();

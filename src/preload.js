@@ -26,7 +26,7 @@ const RECOVERY_ACTIONS = new Set([
   "wall-climb",
   "hang"
 ]);
-const SPEECH_TEXT = new Set(["爸爸", "我错了"]);
+const SPEECH_TEXT = new Set(["爸爸", "我错了", "爸爸，我错了"]);
 let latestBackgroundMode;
 let latestVisualOffset;
 

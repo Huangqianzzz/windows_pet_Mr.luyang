@@ -352,7 +352,7 @@ test("renderer combines rest and background pause reasons across bootstrap and p
     loop: true,
     frames: [frame]
   };
-  const manifest = { actions: { idle: action, crawl: action } };
+  const manifest = { actions: { idle: action, crawl: action, fall: action } };
   class Player {
     constructor(received) { this.manifest = received; this.calls = []; }
     play(name, options = {}) {
@@ -401,6 +401,17 @@ test("renderer combines rest and background pause reasons across bootstrap and p
     detail: { id: 3, action: "crawl", force: false }
   }));
   assert.deepEqual(player.calls.slice(-3), [["freeze"], ["play", "crawl"], ["freeze"]]);
+
+  eventTarget.dispatchEvent(new LocalCustomEvent("desktop-pet:background-mode", {
+    detail: { paused: false }
+  }));
+  eventTarget.dispatchEvent(new LocalCustomEvent("desktop-pet:interaction-command", {
+    detail: { id: 4, type: "freeze", expiresAt: Number.MAX_SAFE_INTEGER }
+  }));
+  eventTarget.dispatchEvent(new LocalCustomEvent("desktop-pet:animation-command", {
+    detail: { id: 5, action: "fall", force: true }
+  }));
+  assert.deepEqual(player.calls.slice(-2), [["play", "fall"], ["resume"]]);
 });
 
 test("renderer freezes from bootstrap truth when the initial background IPC was completely missed", async () => {
