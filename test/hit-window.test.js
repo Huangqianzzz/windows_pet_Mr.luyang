@@ -81,6 +81,14 @@ test("hit document is local-only and loads no renderer dependencies beyond its b
   assert.doesNotMatch(html, /https?:\/\//);
 });
 
+test("hit surface keeps a nonzero alpha so Windows can route pointer input", () => {
+  const css = fs.readFileSync(path.join(__dirname, "..", "src", "render", "hit.css"), "utf8");
+  const sharedRules = css.match(/html,\s*\nbody\s*\{([^}]*)\}/)?.[1] || "";
+
+  assert.match(css, /background:\s*rgba\(0,\s*0,\s*0,\s*0\.01\)/);
+  assert.doesNotMatch(sharedRules, /background:/);
+});
+
 test("main configures a separate focusable hit window and a mouse-transparent render window", () => {
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "main.js"), "utf8");
 
