@@ -132,6 +132,20 @@ test("keeps a body resting on an unchanged support", () => {
   assert.equal(result.body.vy, 0);
 });
 
+test("lands on the work-area floor when no taskbar obstacle is available", () => {
+  const workArea = { x: 0, y: 0, width: 100, height: 80 };
+  const result = stepFall(
+    { x: 10, y: 50, width: 10, height: 10, vx: 0, vy: 200 },
+    [],
+    100,
+    { gravity: 0, workArea }
+  );
+
+  assert.equal(result.body.y, 70);
+  assert.equal(result.body.vy, 0);
+  assert.equal(result.landing.source, "work-area");
+});
+
 test("rejects invalid bodies, time steps, gravity, and obstacle rectangles", () => {
   const body = { x: 0, y: 0, width: 10, height: 10, vx: 0, vy: 0 };
 

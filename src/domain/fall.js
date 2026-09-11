@@ -44,11 +44,12 @@ function downwardImpactTime(distance, vy, gravity, dt) {
   return roots.length > 0 ? Math.min(...roots) : null;
 }
 
-function stepFall(body, obstacles, dtMs, { gravity = DEFAULT_GRAVITY } = {}) {
+function stepFall(body, obstacles, dtMs, { gravity = DEFAULT_GRAVITY, workArea } = {}) {
   validateBody(body);
   if (!Array.isArray(obstacles)) throw new TypeError("obstacles must be an array");
   if (!Number.isFinite(dtMs) || dtMs < 0) throw new RangeError("time step must be non-negative");
   if (!Number.isFinite(gravity)) throw new TypeError("gravity must be finite");
+  if (workArea) obstacleRect(workArea);
 
   const dt = dtMs / 1000;
   const dx = body.vx * dt;
@@ -57,7 +58,16 @@ function stepFall(body, obstacles, dtMs, { gravity = DEFAULT_GRAVITY } = {}) {
   const startBottom = body.y + body.height;
   let nearest = null;
 
-  for (const obstacle of obstacles) {
+  const surfaces = workArea
+    ? [...obstacles, { source: "work-area", id: "floor", rect: {
+        x: workArea.x,
+        y: workArea.y + workArea.height,
+        width: workArea.width,
+        height: 1
+      } }]
+    : obstacles;
+
+  for (const obstacle of surfaces) {
     const rect = obstacleRect(obstacle);
     let time;
     const startsSlightlyOverlapping = body.y < rect.y

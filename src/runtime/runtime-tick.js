@@ -9,7 +9,11 @@ function blockedHorizontally(result) {
 }
 
 function runRuntimeTick({ controller, roam, settings, screen, dtMs, nowMs }) {
-  controller.tick(dtMs);
+  const beforeTick = controller.snapshot();
+  const fallWorkArea = beforeTick.state.mode === "falling"
+    ? screen.getDisplayMatching(beforeTick.body).workArea
+    : undefined;
+  controller.tick(dtMs, fallWorkArea);
   const snapshot = controller.snapshot();
   if (snapshot.state.mode === "behind-window") {
     controller.advanceBehindWindowEscape(dtMs);
@@ -20,8 +24,8 @@ function runRuntimeTick({ controller, roam, settings, screen, dtMs, nowMs }) {
     const workArea = screen.getDisplayMatching(snapshot.body).workArea;
     const result = controller.advanceAutoClimb(dtMs, workArea);
     if (result.atEdge || result.stalled) {
-      const plan = result.target ? controller.planBehindWindowEscape(result.target) : null;
-      if (!plan || !controller.beginBehindWindowEscape(plan)) controller.supportLost();
+      const plan = result.target ? controller.planBehindWindowEscape(result.target, workArea) : null;
+      if (!plan || !controller.beginBehindWindowEscape(plan, workArea)) controller.supportLost();
     }
     return { kind: "auto-climb" };
   }

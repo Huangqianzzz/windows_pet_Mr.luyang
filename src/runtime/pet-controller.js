@@ -383,21 +383,21 @@ class PetController {
     return Boolean(this.autoClimb && this.state.mode === "attached");
   }
 
-  planBehindWindowEscape(target) {
+  planBehindWindowEscape(target, workArea) {
     if (!target || !Number.isSafeInteger(target.hwnd) || target.hwnd <= 0) return null;
     try {
       return planBehindWindowEscape({ body: this.body, target,
-        obstacles: this.obstacleIndex.snapshot(), clearance: 1 });
+        obstacles: this.obstacleIndex.snapshot(), clearance: 1, workArea });
     } catch {
       return null;
     }
   }
 
-  beginBehindWindowEscape(plan) {
+  beginBehindWindowEscape(plan, workArea) {
     if (this.behindEscape || this.isBackgroundPaused() || !this.layerCoordinator || !plan) return false;
     const next = reducePetState(this.state, { type: "ENTER_BEHIND_WINDOW", automatic: this.isAutoClimbing() });
     if (next.mode !== "behind-window") return false;
-    const currentPlan = this.planBehindWindowEscape(plan.target);
+    const currentPlan = this.planBehindWindowEscape(plan.target, workArea);
     const speed = plan.speed ?? this.autoClimbSpeed / 1000;
     if (!currentPlan || !Number.isFinite(speed) || speed <= 0
       || !Array.isArray(plan.points) || plan.points.length !== currentPlan.points.length
@@ -406,7 +406,7 @@ class PetController {
 
     this.behindEscape = { target: currentPlan.target, lastRect: currentPlan.target.rect,
       points: currentPlan.points, segmentIndex: 1, speed,
-      bodySize: { width: this.body.width, height: this.body.height } };
+      bodySize: { width: this.body.width, height: this.body.height }, workArea };
     try {
       this.setInputBlocked("behind-window", true);
       this.hideBubble();
@@ -431,7 +431,7 @@ class PetController {
     if (["x", "y", "width", "height"].some(key => current.rect[key] !== session.lastRect[key])
       || this.body.width !== session.bodySize.width || this.body.height !== session.bodySize.height) {
       if (!intersects(this.body, current.rect)) return false;
-      const plan = this.planBehindWindowEscape(current);
+      const plan = this.planBehindWindowEscape(current, session.workArea);
       if (!plan) return false;
       session.target = plan.target;
       session.lastRect = plan.target.rect;
@@ -608,11 +608,12 @@ class PetController {
     return true;
   }
 
-  tick(dtMs) {
+  tick(dtMs, workArea) {
     if (this.state.mode !== "falling") {
       return { body: { ...this.body }, landing: null };
     }
-    const options = this.gravity === undefined ? undefined : { gravity: this.gravity };
+    const options = { ...(this.gravity === undefined ? {} : { gravity: this.gravity }),
+      ...(workArea === undefined ? {} : { workArea }) };
     const result = stepFall(this.body, this.obstacleIndex.snapshot(), dtMs, options);
     this.body = result.body;
     this.#renderBody();

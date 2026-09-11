@@ -32,8 +32,9 @@ function validateStepInput({ body, dx, dy, workArea, obstacles }) {
   obstacles.forEach((obstacle, index) => validateObstacle(`obstacles[${index}]`, obstacle));
 }
 
-function validateEscapeInput({ body, target, obstacles, clearance }) {
+function validateEscapeInput({ body, target, obstacles, clearance, workArea }) {
   validateRect("body", body);
+  if (workArea) validateRect("workArea", workArea);
   validateObstacle("target", target);
   if (!Array.isArray(obstacles)) throw new TypeError("obstacles must be an array");
   obstacles.forEach((obstacle, index) => validateObstacle(`obstacles[${index}]`, obstacle));
@@ -225,8 +226,8 @@ function segmentClear(body, from, to, obstacles) {
   return obstacles.every(obstacle => overlapArea(start, obstacle.rect) === 0 && sweepTime(start, to.x - from.x, to.y - from.y, obstacle) === null);
 }
 
-function planBehindWindowEscape({ body, target, obstacles, clearance }) {
-  validateEscapeInput({ body, target, obstacles, clearance });
+function planBehindWindowEscape({ body, target, obstacles, clearance, workArea }) {
+  validateEscapeInput({ body, target, obstacles, clearance, workArea });
   if (target.source !== "window") return null;
   const currentTarget = obstacles.find(obstacle => sameIdentity(obstacle, target));
   if (!currentTarget || currentTarget.source !== "window") return null;
@@ -248,7 +249,10 @@ function planBehindWindowEscape({ body, target, obstacles, clearance }) {
     const points = [{ x: body.x, y: body.y }];
     if (turn.x !== body.x || turn.y !== body.y) points.push(turn);
     points.push(exit.point);
-    const safe = !others.some(obstacle => overlapArea({ ...body, x: exit.point.x, y: exit.point.y }, obstacle.rect) > 0) &&
+    const insideWorkArea = !workArea || points.every(point => point.x >= workArea.x && point.y >= workArea.y &&
+      point.x + body.width <= workArea.x + workArea.width &&
+      point.y + body.height <= workArea.y + workArea.height);
+    const safe = insideWorkArea && !others.some(obstacle => overlapArea({ ...body, x: exit.point.x, y: exit.point.y }, obstacle.rect) > 0) &&
       points.slice(1).every((point, index) => segmentClear(body, points[index], point, others));
     return { ...exit, points, safe, distance: points.slice(1).reduce((sum, point, index) =>
       sum + Math.abs(point.x - points[index].x) + Math.abs(point.y - points[index].y), 0) };

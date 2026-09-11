@@ -16,16 +16,30 @@ test("runtime tick routes automatic-climb stall to a valid behind plan exactly o
     const controller = {
       tick() {}, snapshot: () => ({ state: { mode }, body }), isAutoClimbing: () => true,
       advanceAutoClimb: () => ({ ...outcome, target }),
-      planBehindWindowEscape(value) { calls.push(["plan", value]); return plan; },
-      beginBehindWindowEscape(value) { calls.push(["begin", value]); mode = "behind-window"; return true; },
+      planBehindWindowEscape(value, area) { calls.push(["plan", value, area]); return plan; },
+      beginBehindWindowEscape(value, area) { calls.push(["begin", value, area]); mode = "behind-window"; return true; },
       advanceBehindWindowEscape(dtMs) { calls.push(["escape", dtMs]); }
     };
     const args = { controller, roam: { tick() { throw new Error("roam competed"); } },
       settings: { autonomousActivity: true }, screen: { getDisplayMatching: () => ({ workArea }) }, dtMs: 16, nowMs: 0 };
     runRuntimeTick(args);
     runRuntimeTick(args);
-    assert.deepEqual(calls, [["plan", target], ["begin", plan], ["escape", 16]]);
+    assert.deepEqual(calls, [["plan", target, workArea], ["begin", plan, workArea], ["escape", 16]]);
   }
+});
+
+test("runtime tick supplies the current work area to falling physics", () => {
+  const calls = [];
+  const controller = {
+    snapshot: () => ({ state: { mode: "falling" }, body }),
+    tick(dtMs, area) { calls.push([dtMs, area]); }
+  };
+  const roam = { tick: () => ({ kind: "none" }) };
+
+  runRuntimeTick({ controller, roam, settings: {},
+    screen: { getDisplayMatching: () => ({ workArea }) }, dtMs: 16, nowMs: 0 });
+
+  assert.deepEqual(calls, [[16, workArea]]);
 });
 
 test("runtime tick falls once when automatic climb loses target or cannot escape", () => {

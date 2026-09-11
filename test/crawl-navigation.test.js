@@ -164,6 +164,21 @@ test("plans a behind-window route from the current point to a clear external edg
   assert.equal(Object.isFrozen(plan), true);
 });
 
+test("keeps a behind-window escape endpoint inside the work area", () => {
+  const target = obstacle("window:target", "window", rect(0, 100, 200, 100), 123);
+  const body = rect(50, 180);
+  const plan = planBehindWindowEscape({
+    body, target, obstacles: [target], clearance: 5, workArea
+  });
+
+  assert.notEqual(plan.exitEdge, "bottom");
+  for (const point of plan.points) {
+    assert.ok(point.x >= workArea.x && point.y >= workArea.y);
+    assert.ok(point.x + body.width <= workArea.x + workArea.width);
+    assert.ok(point.y + body.height <= workArea.y + workArea.height);
+  }
+});
+
 test("refuses a behind-window route when all exits are blocked or target identity is stale", () => {
   const target = obstacle("window:target", "window", rect(100, 100, 50, 50), 123);
   const body = rect(110, 110);
