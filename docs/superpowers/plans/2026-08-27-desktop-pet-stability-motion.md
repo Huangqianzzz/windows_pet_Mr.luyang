@@ -411,7 +411,106 @@ git commit -m "perf: add subpixel desktop pet rendering"
 
 ---
 
-### Task 7: 真实桌面验收、评审与安装包
+### Task 7: 窗口上沿按位置坐下或悬挂
+
+**Files:**
+- Modify: `src/domain/attachment.js`
+- Modify: `src/runtime/pet-controller.js`
+- Test: `test/attachment.test.js`
+- Test: `test/pet-controller.test.js`
+
+**Interfaces:**
+- Consumes: `findReleaseZone(point, obstacles, threshold)` 返回的顶部归一化位置 `t`，以及现有 `sit`、`hang` 动画和支撑锚点。
+- Produces: `chooseReleasePose(zone, chooser, t)`；顶部 `0.2 <= t <= 0.8` 返回 `hang`，其余顶部位置返回 `sit`，其他区域保持原行为。
+
+- [ ] **Step 1: 写顶部位置选择失败测试**
+
+在 `test/attachment.test.js` 先加入：
+
+```js
+test("uses hang across the middle sixty percent of a top edge", () => {
+  assert.deepEqual(releasePoseOptions("top"), ["sit", "hang"]);
+  assert.equal(chooseReleasePose("top", choices => choices[0], 0.19), "sit");
+  assert.equal(chooseReleasePose("top", choices => choices[0], 0.2), "hang");
+  assert.equal(chooseReleasePose("top", choices => choices[0], 0.8), "hang");
+  assert.equal(chooseReleasePose("top", choices => choices[0], 0.81), "sit");
+});
+```
+
+在 `test/pet-controller.test.js` 加入：
+
+```js
+test("top-edge drag release selects pose from its horizontal position", () => {
+  const target = obstacle("window:top-pose", { x: 100, y: 100, width: 400, height: 300 });
+  for (const [x, expected] of [[140, "sit"], [300, "hang"], [460, "sit"]]) {
+    const harness = createHarness();
+    harness.obstacleIndex.replace("windows", [target]);
+    harness.controller.handleInput("drag-start", { x: 0, y: 0 });
+    const release = harness.controller.handleInput("drag-end", { x, y: 101 });
+    assert.equal(release.pose, expected);
+    assert.equal(harness.controller.snapshot().attachment.pose, expected);
+  }
+});
+```
+
+- [ ] **Step 2: 运行测试并确认按预期失败**
+
+Run: `node --test test/attachment.test.js test/pet-controller.test.js`
+
+Expected: FAIL，顶部选项仍只有 `sit`，顶部中间释放仍得到 `sit`。
+
+- [ ] **Step 3: 写最小实现**
+
+在 `src/domain/attachment.js` 将顶部姿势改为：
+
+```js
+top: Object.freeze(["sit", "hang"])
+```
+
+扩展现有选择函数，不创建新模块：
+
+```js
+function chooseReleasePose(zone, chooser = choices => choices[0], t) {
+  if (typeof chooser !== "function") throw new TypeError("pose chooser must be a function");
+  const choices = releasePoseOptions(zone);
+  if (zone === "top" && Number.isFinite(t)) return t >= 0.2 && t <= 0.8 ? "hang" : "sit";
+  const pose = chooser(Object.freeze(choices), zone);
+  if (!choices.includes(pose)) throw new RangeError(`Pose ${pose} is not allowed for ${zone}`);
+  return pose;
+}
+```
+
+在 `PetController.#endDrag()` 仅补传现有位置：
+
+```js
+const pose = chooseReleasePose(release.zone, this.choosePose, release.t);
+```
+
+- [ ] **Step 4: 运行定向与完整测试**
+
+Run:
+
+```powershell
+node --test test/attachment.test.js test/pet-controller.test.js
+npm test
+git diff --check
+```
+
+Expected: 所有测试 PASS，差异检查无错误。
+
+- [ ] **Step 5: 真机验收、独立复审并提交**
+
+分别把人物拖到同一窗口上沿的左端、中间、右端，确认姿势依次为坐下、悬挂、坐下；随后移动、最小化和关闭支撑窗口，确认仍自然掉落。独立复审无 Critical/Important 后提交并推送：
+
+```powershell
+git add src/domain/attachment.js src/runtime/pet-controller.js test/attachment.test.js test/pet-controller.test.js
+git commit -m "feat: hang from the middle of window tops"
+git push origin codex/desktop-pet-duel
+```
+
+---
+
+### Task 8: 真实桌面验收、评审与安装包
 
 **Files:**
 - Modify: `package.json`
