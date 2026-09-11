@@ -524,7 +524,8 @@ class PetController {
       }
       this.autoClimb.firstStep = false;
     }
-    const intersectsWindow = obstacles.some(obstacle => intersects(nextBody, obstacle.rect));
+    const intersectsWindow = obstacles.some(obstacle =>
+      !sameIdentity(obstacle, current) && intersects(nextBody, obstacle.rect));
     if (intersectsWindow) {
       return { moved: false, stalled: true, target: this.#targetInfo(current), atEdge: false };
     }

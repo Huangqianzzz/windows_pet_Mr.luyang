@@ -856,6 +856,23 @@ test("creates one wall-climb attachment from a valid current window candidate", 
   assert.equal(intersects(harness.controller.snapshot().body, target.rect), false);
 });
 
+test("auto climb ignores its support window collision but still stops at other windows", () => {
+  const climb = extraObstacles => {
+    const harness = createHarness({
+      poseAnchors: { "wall-climb": { x: 69, y: 8 } },
+      body: { x: 231, y: 242, width: 192, height: 208, vx: 0, vy: 0 }
+    });
+    const target = obstacle("window:climb", { x: 300, y: 100, width: 50, height: 300 }, "window", 77);
+    harness.obstacleIndex.replace("windows", [target, ...extraObstacles]);
+    harness.controller.startCrawl("right");
+    assert.equal(harness.controller.beginAutoClimb({ target, edge: "left", t: 0.5 }), true);
+    return harness.controller.advanceAutoClimb(16, { x: 0, y: 0, width: 1000, height: 1000 });
+  };
+
+  assert.equal(climb([]).stalled, false);
+  assert.equal(climb([obstacle("window:blocker", { x: 240, y: 250, width: 10, height: 20 }, "window", 78)]).stalled, true);
+});
+
 test("refuses the first climb step when the target window jumps far between ticks", () => {
   const harness = createHarness({
     poseAnchors: { "wall-climb": { x: 25, y: 15 } },

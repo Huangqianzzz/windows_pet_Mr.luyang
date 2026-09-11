@@ -374,7 +374,7 @@ function createRuntime() {
       return result.accepted;
     },
     showBubble: showSpeechBubble,
-    speak: (text, volume) => speakChinese(text, volume),
+    speak: speakChinese,
     hideBubble: hideSpeechBubble,
     async recover(action) {
       await rendererCommandBridge.request("recover", action);

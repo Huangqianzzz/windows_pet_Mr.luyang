@@ -127,7 +127,8 @@ function strictlyReducesOverlapThroughout(body, dx, dy, rect) {
   const finalArea = overlapAreaAt(body, dx, dy, rect, 1);
   if (finalArea >= initialArea || !movesAwayFromOverlap(body, dx, dy, { rect })) return false;
 
-  for (const [start, end] of overlapBreakpoints(body, dx, dy, rect).slice(0, -1).map((time, index, times) => [time, times[index + 1]])) {
+  const breakpoints = overlapBreakpoints(body, dx, dy, rect);
+  for (const [start, end] of breakpoints.slice(0, -1).map((time, index) => [time, breakpoints[index + 1]])) {
     const middle = (start + end) / 2;
     const startArea = overlapAreaAt(body, dx, dy, rect, start);
     const middleArea = overlapAreaAt(body, dx, dy, rect, middle);

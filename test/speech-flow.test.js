@@ -7,6 +7,11 @@ const { EventEmitter } = require("node:events");
 const { PassThrough } = require("node:stream");
 const vm = require("node:vm");
 
+test("main forwards the speech cancellation signal to the local TTS process", () => {
+  const main = fs.readFileSync(path.join(__dirname, "../src/main.js"), "utf8");
+  assert.match(main, /speak:\s*speakChinese/);
+});
+
 function fakeSpeechProcess(output, calls) {
   return (command, args, options) => {
     const child = new EventEmitter();

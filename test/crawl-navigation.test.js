@@ -93,6 +93,15 @@ test("only permits a pre-overlapped body to reduce overlap", () => {
   assert.deepEqual(across.blockedAxes, ["x"]);
 });
 
+test("rejects a diagonal escape that initially increases overlap", () => {
+  const body = rect(65, 65, 50, 50);
+  const blocker = obstacle("window:overlap", "window", rect(100, 100, 100, 100), 10);
+  const result = resolveCrawlStep({ body, dx: -10, dy: 20, workArea, obstacles: [blocker] });
+
+  assert.equal(result.fullyMoved, false);
+  assert.deepEqual(result.body, rect(55, 65, 50, 50));
+});
+
 test("clamps one work-area axis without losing the legal other axis", () => {
   const result = resolveCrawlStep({ body: rect(85, 20), dx: 10, dy: 10, workArea: rect(0, 0, 100, 100), obstacles: [] });
 

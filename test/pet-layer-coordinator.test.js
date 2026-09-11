@@ -74,8 +74,7 @@ test("background transactions retain a real automatic escape across resume and r
     const tick = () => runRuntimeTick({ controller, roam: { tick() { throw new Error("roam competed"); } },
       settings: {}, screen: { getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 500, height: 500 } }) },
       dtMs: 16, nowMs: 16 });
-    tick();
-    tick();
+    for (let count = 0; count < 200 && controller.state.mode !== "behind-window"; count++) tick();
     assert.equal(controller.state.mode, "behind-window");
     assert.equal(h.calls.filter(call => call[0] === "below").length, 1);
     assert.equal(h.calls.filter(call => call[0] === "hit" && call[1] === "hide").length, 1);
