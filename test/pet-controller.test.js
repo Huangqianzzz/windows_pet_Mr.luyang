@@ -333,13 +333,13 @@ test("manual attachments reject behind escape and missing hwnd cannot produce a 
   assert.equal(h.controller.planBehindWindowEscape(withoutHwnd), null);
 });
 
-test("drag release attaches with an injected pose and follows target move and resize", () => {
+test("drag release attaches and follows target move and resize", () => {
   const harness = createHarness({ choosePose: choices => choices[0] });
   const target = obstacle("window:42", { x: 100, y: 100, width: 400, height: 300 });
 
   const release = attachToTop(harness, target);
 
-  assert.deepEqual(release, { accepted: true, zone: "top", pose: "sit" });
+  assert.deepEqual(release, { accepted: true, zone: "top", pose: "hang" });
   assert.equal(harness.controller.snapshot().state.mode, "attached");
   assert.equal(harness.controller.snapshot().attachment.target.id, "window:42");
   assert.equal(harness.controller.snapshot().attachment.t, 0.25);
@@ -355,6 +355,18 @@ test("drag release attaches with an injected pose and follows target move and re
     { x: 200, y: 80, width: 800, height: 500 });
 });
 
+test("top-edge drag release selects pose from its horizontal position", () => {
+  const target = obstacle("window:top-pose", { x: 100, y: 100, width: 400, height: 300 });
+  for (const [x, expected] of [[140, "sit"], [300, "hang"], [460, "sit"]]) {
+    const harness = createHarness();
+    harness.obstacleIndex.replace("windows", [target]);
+    harness.controller.handleInput("drag-start", { x: 0, y: 0 });
+    const release = harness.controller.handleInput("drag-end", { x, y: 101 });
+    assert.equal(release.pose, expected);
+    assert.equal(harness.controller.snapshot().attachment.pose, expected);
+  }
+});
+
 test("attachment support anchors place top, side, and bottom poses on the window edge", () => {
   const target = obstacle("window:anchor", { x: 100, y: 100, width: 400, height: 300 });
   const poseAnchors = {
@@ -367,7 +379,7 @@ test("attachment support anchors place top, side, and bottom poses on the window
   top.obstacleIndex.replace("windows", [target]);
   top.controller.handleInput("drag-start", { x: 0, y: 0 });
   top.controller.handleInput("drag-end", { x: 200, y: 101 });
-  assert.deepEqual(top.renderBounds.at(-1), { x: 190, y: 80, width: 20, height: 30 });
+  assert.deepEqual(top.renderBounds.at(-1), { x: 190, y: 98, width: 20, height: 30 });
 
   const right = createHarness({ poseAnchors });
   right.obstacleIndex.replace("windows", [target]);
@@ -386,7 +398,7 @@ test("attachment support anchors place top, side, and bottom poses on the window
 });
 
 test("resizing an attached pose keeps its support anchor fixed to the window edge", () => {
-  const harness = createHarness({ poseAnchors: { sit: { x: 10, y: 20 } } });
+  const harness = createHarness({ poseAnchors: { hang: { x: 10, y: 2 } } });
   harness.obstacleIndex.replace("windows", [
     obstacle("window:scale-anchor", { x: 100, y: 100, width: 400, height: 300 })
   ]);
@@ -394,7 +406,7 @@ test("resizing an attached pose keeps its support anchor fixed to the window edg
   harness.controller.handleInput("drag-end", { x: 200, y: 101 });
 
   assert.equal(harness.controller.setScale(2), true);
-  assert.deepEqual(harness.renderBounds.at(-1), { x: 180, y: 60, width: 40, height: 60 });
+  assert.deepEqual(harness.renderBounds.at(-1), { x: 180, y: 96, width: 40, height: 60 });
 });
 
 test("every wall-climb frame support anchor stays fixed to either window side at every scale", () => {
@@ -552,7 +564,7 @@ test("attached and crawling speech flows recover controller state with the match
   const cases = [
     {
       expectedMode: "attached",
-      expectedAction: "sit",
+      expectedAction: "hang",
       prepare(harness) {
         attachToTop(harness, obstacle("window:flow", { x: 100, y: 100, width: 400, height: 300 }));
       }

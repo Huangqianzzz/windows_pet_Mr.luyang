@@ -1,7 +1,7 @@
 const { nearestEdge } = require("./geometry");
 
 const RELEASE_POSES = Object.freeze({
-  top: Object.freeze(["sit"]),
+  top: Object.freeze(["sit", "hang"]),
   side: Object.freeze(["wall-climb"]),
   bottom: Object.freeze(["hang"]),
   open: Object.freeze(["land", "crawl"])
@@ -42,9 +42,10 @@ function releasePoseOptions(zone) {
   return [...choices];
 }
 
-function chooseReleasePose(zone, chooser = choices => choices[0]) {
+function chooseReleasePose(zone, chooser = choices => choices[0], t) {
   if (typeof chooser !== "function") throw new TypeError("pose chooser must be a function");
   const choices = releasePoseOptions(zone);
+  if (zone === "top" && Number.isFinite(t)) return t >= 0.2 && t <= 0.8 ? "hang" : "sit";
   const pose = chooser(Object.freeze(choices), zone);
   if (!choices.includes(pose)) throw new RangeError(`Pose ${pose} is not allowed for ${zone}`);
   return pose;

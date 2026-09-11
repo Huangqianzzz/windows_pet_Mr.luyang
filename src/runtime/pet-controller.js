@@ -687,7 +687,7 @@ class PetController {
   #endDrag(point) {
     if (this.state.mode !== "dragging") return { accepted: false };
     const release = findReleaseZone(point, this.obstacleIndex.snapshot(), this.releaseThreshold);
-    const pose = chooseReleasePose(release.zone, this.choosePose);
+    const pose = chooseReleasePose(release.zone, this.choosePose, release.t);
     this.dragOffset = null;
     this.#clearAutoClimb();
 

@@ -55,7 +55,7 @@ test("rejects invalid rectangles and edge-pose combinations", () => {
     /positive area/
   );
   assert.throws(
-    () => createAttachment({ x: 0, y: 0, width: 20, height: 20 }, "top", 0.5, "hang"),
+    () => createAttachment({ x: 0, y: 0, width: 20, height: 20 }, "top", 0.5, "wall-climb"),
     /pose/
   );
   assert.throws(
@@ -68,12 +68,20 @@ test("rejects invalid rectangles and edge-pose combinations", () => {
 });
 
 test("exposes only the exact release poses and accepts an injected deterministic choice", () => {
-  assert.deepEqual(releasePoseOptions("top"), ["sit"]);
+  assert.deepEqual(releasePoseOptions("top"), ["sit", "hang"]);
   assert.deepEqual(releasePoseOptions("side"), ["wall-climb"]);
   assert.deepEqual(releasePoseOptions("bottom"), ["hang"]);
   assert.deepEqual(releasePoseOptions("open"), ["land", "crawl"]);
   assert.equal(chooseReleasePose("top", choices => choices[0]), "sit");
   assert.throws(() => chooseReleasePose("bottom", () => "sit"), /allowed/);
+});
+
+test("uses hang across the middle sixty percent of a top edge", () => {
+  assert.deepEqual(releasePoseOptions("top"), ["sit", "hang"]);
+  assert.equal(chooseReleasePose("top", choices => choices[0], 0.19), "sit");
+  assert.equal(chooseReleasePose("top", choices => choices[0], 0.2), "hang");
+  assert.equal(chooseReleasePose("top", choices => choices[0], 0.8), "hang");
+  assert.equal(chooseReleasePose("top", choices => choices[0], 0.81), "sit");
 });
 
 test("finds the nearest edge release zone or reports open space", () => {
