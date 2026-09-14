@@ -71,6 +71,28 @@ test("native enumeration rejects complete and partial records when EnumWindows r
   assert.equal(failed, null);
 });
 
+test("native enumeration drops records when the HWND process identity is not stable", () => {
+  function enumerateWithProcessReads(reads) {
+    return enumerateNativeWindows(
+      callback => { callback(7); return 1; },
+      (hwnd, processId) => ({ hwnd, processId, rect: [0, 0, 10, 10] }),
+      hwnd => {
+        const next = reads.shift();
+        if (next instanceof Error) throw next;
+        return next;
+      }
+    );
+  }
+
+  assert.deepEqual(enumerateWithProcessReads([111, 222]), []);
+  assert.deepEqual(enumerateWithProcessReads([0, 111]), []);
+  assert.deepEqual(enumerateWithProcessReads([111, 0]), []);
+  assert.deepEqual(enumerateWithProcessReads([111, new Error("pid-read-failed")]), []);
+  assert.deepEqual(enumerateWithProcessReads([111, 111]), [
+    { hwnd: 7, processId: 111, rect: [0, 0, 10, 10] }
+  ]);
+});
+
 function fakeClock() {
   let now = 0;
   let nextId = 0;

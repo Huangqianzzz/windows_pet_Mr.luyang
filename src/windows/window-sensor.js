@@ -25,10 +25,28 @@ function classifyWindowEvent(event, hwnd, idObject) {
   };
 }
 
-function enumerateNativeWindows(enumWindows, readRecord) {
+function isValidProcessId(processId) {
+  return Number.isSafeInteger(processId) && processId > 0;
+}
+
+function enumerateNativeWindows(enumWindows, readRecord, readProcessId) {
   const records = [];
   const completed = enumWindows(hwnd => {
-    records.push(readRecord(hwnd));
+    if (!readProcessId) {
+      records.push(readRecord(hwnd));
+      return 1;
+    }
+
+    try {
+      const processId = readProcessId(hwnd);
+      if (!isValidProcessId(processId)) return 1;
+      const record = readRecord(hwnd, processId);
+      const finalProcessId = readProcessId(hwnd);
+      if (!isValidProcessId(finalProcessId) || finalProcessId !== processId) return 1;
+      records.push(record);
+    } catch {
+      // A reused or invalid HWND is discarded from this snapshot.
+    }
     return 1;
   }, 0);
   return completed ? records : null;
@@ -362,10 +380,13 @@ function createNativeWindowBindings() {
 
   return {
     enumerateWindows() {
-      return enumerateNativeWindows(EnumWindows, hwnd => {
+      function readWindowProcessId(hwnd) {
         const processId = [null];
-        GetWindowThreadProcessId(hwnd, processId);
+        if (!GetWindowThreadProcessId(hwnd, processId)) return 0;
+        return Number(processId[0] || 0);
+      }
 
+      return enumerateNativeWindows(EnumWindows, (hwnd, processId) => {
         const frame = {};
         const frameResult = DwmGetWindowRect(
           hwnd,
@@ -383,10 +404,10 @@ function createNativeWindowBindings() {
           cloaked: cloakResult !== 0 || Boolean(cloaked[0]),
           minimized: Boolean(IsIconic(hwnd)),
           systemWindow: isSystemShellWindow(hwnd),
-          processId: Number(processId[0] || 0),
+          processId,
           rect: frameResult === 0 ? convertPhysicalRect(hwnd, frame) : null
         };
-      });
+      }, readWindowProcessId);
     },
     toDipRect(_hwnd, rect) {
       return rect;
