@@ -110,6 +110,7 @@ test("filters invisible, cloaked, own, and zero-area windows", () => {
       source: "window",
       id: "window:1",
       hwnd: 1,
+      processId: 1,
       rect: { x: 10, y: 10, width: 200, height: 100 }
     }
   ]);

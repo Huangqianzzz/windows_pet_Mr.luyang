@@ -16,8 +16,9 @@ function fakeClock() {
   };
 }
 
-const support = { source: "window", id: "window:7", hwnd: 7, rect: { x: 0, y: 0, width: 100, height: 100 } };
-const attachment = { target: { source: "window", id: "window:7", hwnd: 7 } };
+const support = { source: "window", id: "window:7", hwnd: 7, processId: 111,
+  rect: { x: 0, y: 0, width: 100, height: 100 } };
+const attachment = { target: { source: "window", id: "window:7", hwnd: 7, processId: 111 } };
 
 function harness(refreshes = []) {
   const clock = fakeClock();
@@ -48,6 +49,15 @@ test("support reappearance clears pending confirmation and synchronizes normally
   h.coordinator.handleSnapshot([support], { immediate: false });
   assert.equal(h.clock.count(), 0);
   assert.deepEqual(h.calls, [["replace", [support]], ["sync"]]);
+});
+
+test("treats the same hwnd from another process as missing support", () => {
+  const h = harness([[{ ...support, processId: 222 }]]);
+
+  h.coordinator.handleSnapshot([{ ...support, processId: 222 }], { immediate: false });
+
+  assert.deepEqual(h.calls, []);
+  assert.equal(h.clock.count(), 1);
 });
 
 test("an immediate missing snapshot synchronizes support loss without delay", () => {

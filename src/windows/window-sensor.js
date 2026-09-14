@@ -80,6 +80,7 @@ function toObstacle(record, native, ownProcessId) {
     source: "window",
     id: `window:${record.hwnd}`,
     hwnd: record.hwnd,
+    processId: record.processId,
     rect
   });
 }

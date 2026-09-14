@@ -477,6 +477,41 @@ test("same source and id with a different hwnd is treated as lost support", () =
   assert.equal(harness.hitEvents.at(-1).type, "hide");
 });
 
+test("same hwnd reused by another process is treated as lost support", () => {
+  const harness = createHarness();
+  const target = {
+    ...obstacle("window:reused", { x: 100, y: 100, width: 400, height: 300 }, "window", 42),
+    processId: 111
+  };
+  attachToTop(harness, target);
+
+  harness.obstacleIndex.replace("windows", [{
+    ...target,
+    processId: 222,
+    rect: { x: 600, y: 100, width: 400, height: 300 }
+  }]);
+
+  assert.equal(harness.controller.syncObstacles(), false);
+  assert.equal(harness.controller.snapshot().state.mode, "falling");
+  assert.equal(harness.controller.snapshot().attachment, null);
+});
+
+test("active escape stops before a reused hwnd from another process is placed behind", () => {
+  const h = escapeHarness();
+  const target = { ...h.target, processId: 111 };
+  h.obstacleIndex.replace("windows", [target]);
+  assert.equal(h.controller.beginBehindWindowEscape(h.controller.planBehindWindowEscape(target)), true);
+  const placements = h.layers.length;
+
+  h.obstacleIndex.replace("windows", [{ ...target, processId: 222 }]);
+  const result = h.controller.advanceBehindWindowEscape(0);
+
+  assert.equal(result.targetInvalid, true);
+  assert.equal(h.controller.snapshot().state.mode, "falling");
+  assert.equal(h.layers.filter(layer => layer.behindTarget).length, placements);
+  assert.equal(h.layers.at(-1).normal, true);
+});
+
 test("an attachment without hwnd follows by source and id", () => {
   const harness = createHarness();
   attachToTop(harness, obstacle("window:no-hwnd", { x: 100, y: 100, width: 400, height: 300 }));
@@ -513,6 +548,37 @@ test("support loss interrupts rest and landing completes through explicit lifecy
 
   harness.played.at(-1).options.onComplete();
   assert.equal(harness.controller.snapshot().state.mode, "idle");
+});
+
+test("a support moved offscreen then closed falls back with bounded motion and lands", () => {
+  const harness = createHarness();
+  const target = obstacle("window:moved-offscreen", { x: 100, y: 100, width: 400, height: 100 });
+  const workArea = { x: 0, y: 0, width: 200, height: 200 };
+  attachToTop(harness, target);
+
+  harness.obstacleIndex.replace("windows", [{
+    ...target,
+    rect: { x: 300, y: 100, width: 400, height: 100 }
+  }]);
+  assert.equal(harness.controller.syncObstacles(), true);
+  harness.obstacleIndex.replace("windows", []);
+  assert.equal(harness.controller.syncObstacles(), false);
+  const before = harness.controller.snapshot().body;
+
+  let result = harness.controller.tick(16, workArea);
+  const first = harness.controller.snapshot().body;
+  assert.ok(first.x < before.x && first.x > workArea.x + workArea.width - first.width);
+  assert.equal(result.landing, null);
+  for (let frame = 1; frame < 180 && !result.landing; frame += 1) {
+    result = harness.controller.tick(16, workArea);
+  }
+
+  const landed = harness.controller.snapshot();
+  assert.equal(result.landing?.source, "work-area");
+  assert.equal(landed.state.mode, "landing");
+  assert.ok(landed.body.x >= workArea.x);
+  assert.ok(landed.body.x + landed.body.width <= workArea.x + workArea.width);
+  assert.equal(landed.body.y, workArea.y + workArea.height - landed.body.height);
 });
 
 test("explicit resume restores the safe state captured before exact-frame rest", () => {
@@ -841,14 +907,18 @@ test("creates one wall-climb attachment from a valid current window candidate", 
     autoClimbAnchorTolerance: 64,
     body: { x: 80, y: 150, width: 20, height: 30, vx: 0, vy: 0 }
   });
-  const target = obstacle("window:climb", { x: 100, y: 50, width: 40, height: 200 }, "window", 77);
+  const target = {
+    ...obstacle("window:climb", { x: 100, y: 50, width: 40, height: 200 }, "window", 77),
+    processId: 111
+  };
   harness.obstacleIndex.replace("windows", [target]);
   harness.controller.startCrawl("right");
 
   assert.equal(harness.controller.beginAutoClimb({ target, edge: "left", t: 0.575 }), true);
   const snapshot = harness.controller.snapshot();
   assert.equal(snapshot.state.mode, "attached");
-  assert.deepEqual(snapshot.attachment.target, { id: "window:climb", source: "window", hwnd: 77 });
+  assert.deepEqual(snapshot.attachment.target,
+    { id: "window:climb", source: "window", hwnd: 77, processId: 111 });
   assert.equal(snapshot.attachment.edge, "left");
   assert.equal(snapshot.attachment.pose, "wall-climb");
   assert.equal(snapshot.attachment.t, 0.575);

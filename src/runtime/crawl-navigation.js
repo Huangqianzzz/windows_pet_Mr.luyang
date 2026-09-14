@@ -19,6 +19,9 @@ function validateObstacle(name, obstacle) {
   if (Object.hasOwn(obstacle, "hwnd") && !Number.isSafeInteger(obstacle.hwnd)) {
     throw new TypeError(`${name}.hwnd must be a safe integer`);
   }
+  if (Object.hasOwn(obstacle, "processId") && !Number.isSafeInteger(obstacle.processId)) {
+    throw new TypeError(`${name}.processId must be a safe integer`);
+  }
 }
 
 function validateStepInput({ body, dx, dy, workArea, obstacles }) {
@@ -49,6 +52,7 @@ function cloneTarget(obstacle) {
     rect: cloneRect(obstacle.rect)
   };
   if (Object.hasOwn(obstacle, "hwnd")) target.hwnd = obstacle.hwnd;
+  if (Object.hasOwn(obstacle, "processId")) target.processId = obstacle.processId;
   return Object.freeze(target);
 }
 
@@ -79,7 +83,9 @@ function sweepTime(body, dx, dy, obstacle) {
 function sameIdentity(a, b) {
   return a.source === b.source && a.id === b.id &&
     Object.hasOwn(a, "hwnd") === Object.hasOwn(b, "hwnd") &&
-    (!Object.hasOwn(a, "hwnd") || a.hwnd === b.hwnd);
+    (!Object.hasOwn(a, "hwnd") || a.hwnd === b.hwnd) &&
+    Object.hasOwn(a, "processId") === Object.hasOwn(b, "processId") &&
+    (!Object.hasOwn(a, "processId") || a.processId === b.processId);
 }
 
 function clamp(value, min, max) {

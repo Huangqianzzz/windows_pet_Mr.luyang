@@ -1,7 +1,8 @@
 function sameTarget(obstacle, target) {
   return obstacle.id === target.id
     && (!target.source || obstacle.source === target.source)
-    && (!Object.hasOwn(target, "hwnd") || obstacle.hwnd === target.hwnd);
+    && (!Object.hasOwn(target, "hwnd") || obstacle.hwnd === target.hwnd)
+    && (!Object.hasOwn(target, "processId") || obstacle.processId === target.processId);
 }
 
 function createWindowSupportCoordinator({

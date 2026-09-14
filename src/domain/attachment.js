@@ -23,6 +23,7 @@ function targetParts(targetRect) {
     if (typeof targetRect.source === "string") target.source = targetRect.source;
     if (typeof targetRect.id === "string") target.id = targetRect.id;
     if (Number.isSafeInteger(targetRect.hwnd)) target.hwnd = targetRect.hwnd;
+    if (Number.isSafeInteger(targetRect.processId)) target.processId = targetRect.processId;
     return {
       target: Object.freeze(target),
       rect: cloneRect(targetRect.rect)

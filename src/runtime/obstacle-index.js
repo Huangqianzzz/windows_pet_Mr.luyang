@@ -22,6 +22,12 @@ function cloneObstacle(obstacle) {
     }
     clone.hwnd = obstacle.hwnd;
   }
+  if (Object.hasOwn(obstacle, "processId")) {
+    if (!Number.isSafeInteger(obstacle.processId)) {
+      throw new TypeError("window obstacle processId must be a safe integer");
+    }
+    clone.processId = obstacle.processId;
+  }
   return Object.freeze(clone);
 }
 

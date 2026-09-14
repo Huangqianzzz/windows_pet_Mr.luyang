@@ -27,12 +27,14 @@ test("stores target identity, clamps t, and refreshes the last target rectangle"
     source: "window",
     id: "window:42",
     hwnd: 42,
+    processId: 111,
     rect: { x: 10, y: 20, width: 100, height: 80 }
   };
   const anchor = createAttachment(target, "right", 2, "wall-climb");
   const resolved = resolveAttachment(anchor, { x: -50, y: 40, width: 200, height: 120 });
 
-  assert.deepEqual(anchor.target, { source: "window", id: "window:42", hwnd: 42 });
+  assert.deepEqual(anchor.target,
+    { source: "window", id: "window:42", hwnd: 42, processId: 111 });
   assert.deepEqual(anchor.lastRect, target.rect);
   assert.equal(anchor.t, 1);
   assert.deepEqual(resolved.point, { x: 150, y: 160 });

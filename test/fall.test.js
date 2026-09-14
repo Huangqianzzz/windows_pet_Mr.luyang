@@ -146,6 +146,42 @@ test("lands on the work-area floor when no taskbar obstacle is available", () =>
   assert.equal(result.landing.source, "work-area");
 });
 
+test("recovers below-floor bodies from both sides of a negative-coordinate work area", () => {
+  const workArea = { x: -1920, y: -100, width: 1920, height: 1040 };
+  const dtMs = 1000 / 60;
+
+  for (const startX of [-2020, 50]) {
+    let body = { x: startX, y: 950, width: 50, height: 80, vx: 0, vy: 0 };
+    let landing = null;
+    for (let frame = 0; frame < 120 && !landing; frame += 1) {
+      const previousX = body.x;
+      const result = stepFall(body, [], dtMs, { workArea });
+      body = result.body;
+      landing = result.landing;
+      assert.ok(Math.abs(body.x - previousX) <= workArea.width * dtMs / 1000 + 1e-9);
+    }
+
+    assert.equal(landing?.source, "work-area");
+    assert.ok(body.x >= workArea.x);
+    assert.ok(body.x + body.width <= workArea.x + workArea.width);
+    assert.equal(body.y, workArea.y + workArea.height - body.height);
+  }
+});
+
+test("uses the work-area floor as the last safety fallback when falling starts below it", () => {
+  const workArea = { x: -1920, y: -100, width: 1920, height: 1040 };
+  const result = stepFall(
+    { x: -100, y: 950, width: 50, height: 80, vx: 0, vy: 0 },
+    [],
+    16,
+    { workArea }
+  );
+
+  assert.equal(result.landing?.source, "work-area");
+  assert.equal(result.body.y, 860);
+  assert.equal(result.body.vy, 0);
+});
+
 test("rejects invalid bodies, time steps, gravity, and obstacle rectangles", () => {
   const body = { x: 0, y: 0, width: 10, height: 10, vx: 0, vy: 0 };
 

@@ -53,7 +53,9 @@ function validHitBox(hitBox) {
 function sameIdentity(first, second) {
   return first.source === second.source && first.id === second.id
     && Object.hasOwn(first, "hwnd") === Object.hasOwn(second, "hwnd")
-    && (!Object.hasOwn(first, "hwnd") || first.hwnd === second.hwnd);
+    && (!Object.hasOwn(first, "hwnd") || first.hwnd === second.hwnd)
+    && Object.hasOwn(first, "processId") === Object.hasOwn(second, "processId")
+    && (!Object.hasOwn(first, "processId") || first.processId === second.processId);
 }
 
 function cloneRect(rect) {
@@ -548,6 +550,7 @@ class PetController {
       rect: cloneRect(obstacle.rect)
     };
     if (Object.hasOwn(obstacle, "hwnd")) target.hwnd = obstacle.hwnd;
+    if (Object.hasOwn(obstacle, "processId")) target.processId = obstacle.processId;
     return Object.freeze(target);
   }
 
@@ -585,11 +588,7 @@ class PetController {
     }
     if (!this.attachment?.target?.id) return false;
     const target = this.obstacleIndex.snapshot().find(obstacle =>
-      obstacle.id === this.attachment.target.id
-      && (!this.attachment.target.source || obstacle.source === this.attachment.target.source)
-      && (!Object.hasOwn(this.attachment.target, "hwnd")
-        || obstacle.hwnd === this.attachment.target.hwnd)
-    );
+      sameIdentity(obstacle, this.attachment.target));
     if (!target) {
       this.supportLost();
       return false;
