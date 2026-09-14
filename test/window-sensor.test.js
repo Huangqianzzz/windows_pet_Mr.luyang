@@ -73,24 +73,44 @@ test("native enumeration rejects complete and partial records when EnumWindows r
 
 test("native enumeration drops records when the HWND process identity is not stable", () => {
   function enumerateWithProcessReads(reads) {
-    return enumerateNativeWindows(
+    const calls = [];
+    const records = enumerateNativeWindows(
       callback => { callback(7); return 1; },
-      (hwnd, processId) => ({ hwnd, processId, rect: [0, 0, 10, 10] }),
+      (hwnd, processId) => {
+        calls.push(`record:${processId}`);
+        return { hwnd, processId, rect: [0, 0, 10, 10] };
+      },
       hwnd => {
         const next = reads.shift();
+        calls.push(`pid:${next instanceof Error ? "error" : next}`);
         if (next instanceof Error) throw next;
         return next;
       }
     );
+    return { records, calls };
   }
 
-  assert.deepEqual(enumerateWithProcessReads([111, 222]), []);
-  assert.deepEqual(enumerateWithProcessReads([0, 111]), []);
-  assert.deepEqual(enumerateWithProcessReads([111, 0]), []);
-  assert.deepEqual(enumerateWithProcessReads([111, new Error("pid-read-failed")]), []);
-  assert.deepEqual(enumerateWithProcessReads([111, 111]), [
+  const changed = enumerateWithProcessReads([111, 222]);
+  assert.deepEqual(changed.records, []);
+  assert.deepEqual(changed.calls, ["pid:111", "record:111", "pid:222"]);
+
+  const invalidInitial = enumerateWithProcessReads([0, 111]);
+  assert.deepEqual(invalidInitial.records, []);
+  assert.deepEqual(invalidInitial.calls, ["pid:0"]);
+
+  const invalidFinal = enumerateWithProcessReads([111, 0]);
+  assert.deepEqual(invalidFinal.records, []);
+  assert.deepEqual(invalidFinal.calls, ["pid:111", "record:111", "pid:0"]);
+
+  const failedFinal = enumerateWithProcessReads([111, new Error("pid-read-failed")]);
+  assert.deepEqual(failedFinal.records, []);
+  assert.deepEqual(failedFinal.calls, ["pid:111", "record:111", "pid:error"]);
+
+  const stable = enumerateWithProcessReads([111, 111]);
+  assert.deepEqual(stable.records, [
     { hwnd: 7, processId: 111, rect: [0, 0, 10, 10] }
   ]);
+  assert.deepEqual(stable.calls, ["pid:111", "record:111", "pid:111"]);
 });
 
 function fakeClock() {
